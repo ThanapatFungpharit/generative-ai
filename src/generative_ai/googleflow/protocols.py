@@ -12,8 +12,9 @@ from re import Pattern
 from typing import Protocol, Self, TypedDict, override
 
 from web_page import Locator, Page
+from web_page.types import Milliseconds
 
-from generative_ai.googleflow.types import Milliseconds, Pixels, RawJson
+from generative_ai.googleflow.types import Pixels, RawJson
 
 
 class ViewportSize(TypedDict):

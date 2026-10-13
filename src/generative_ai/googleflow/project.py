@@ -15,6 +15,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from web_page import WebPage
 from web_page.exceptions import ActionFailed
+from web_page.utils import is_str_list
 
 from generative_ai.googleflow.constants import CONFIGS, MANIFESTS, SELECTORS, URLS
 from generative_ai.googleflow.exceptions import (
@@ -34,7 +35,7 @@ from generative_ai.googleflow.exceptions import (
     ProjectRenameError,
     SceneCreationError,
 )
-from generative_ai.googleflow.guards import is_list, is_str_keyed_mapping, is_str_list
+from generative_ai.googleflow.guards import is_list, is_str_keyed_mapping
 from generative_ai.googleflow.models import (
     GenerationMode,
     GenerationSettings,

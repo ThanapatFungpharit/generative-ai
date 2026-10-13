@@ -5,13 +5,11 @@ from __future__ import annotations
 from typing import Literal
 
 # Raw input: untrusted data, not yet validated.
-type RawYaml = object
 type RawJson = object
 """A value returned from page JavaScript, before it is checked."""
 
 # Units
 type Seconds = float
-type Milliseconds = float
 type Pixels = int
 
 # Flow identifiers

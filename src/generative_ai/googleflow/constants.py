@@ -6,17 +6,16 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from web_page.utils import is_str_dict
 from yaml import safe_load
 
-from generative_ai.googleflow.guards import is_str_dict, is_str_keyed_mapping
+from generative_ai.googleflow.guards import is_str_keyed_mapping
 
 if TYPE_CHECKING:
-    from web_page.types import CssSelector, SelectorKey
+    from web_page.types import CssSelector, Milliseconds, RawYaml, SelectorKey
 
     from generative_ai.googleflow.types import (
-        Milliseconds,
         Pixels,
-        RawYaml,
         Seconds,
         Url,
     )
