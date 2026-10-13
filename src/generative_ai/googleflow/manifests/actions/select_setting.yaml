@@ -1,0 +1,15 @@
+name: select_setting
+selectors_name: googleflow
+params: label
+steps:
+  - if:
+      visible: {target: setting_option, timeout: 3000}
+      then:
+        - if:
+            hidden: checked_setting_option
+            then:
+              - click: setting_option
+        - wait_for: checked_setting_option
+      else:
+        - get_all_texts: {target: setting_options, exclude: icons, as: available}
+        - fail: "Google Flow does not offer setting '{label}'."

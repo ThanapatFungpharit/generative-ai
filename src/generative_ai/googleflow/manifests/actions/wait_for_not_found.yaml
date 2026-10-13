@@ -1,0 +1,4 @@
+name: wait_for_not_found
+selectors_name: googleflow
+steps:
+  - wait_for_url: "**/404*"

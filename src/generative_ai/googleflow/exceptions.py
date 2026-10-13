@@ -1,4 +1,11 @@
-from pathlib import Path
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from generative_ai.googleflow.types import MediaAction, MediaId, ProjectMagic
 
 
 class GoogleFlowError(RuntimeError):
@@ -6,22 +13,22 @@ class GoogleFlowError(RuntimeError):
 
 
 class ProjectNotFoundError(GoogleFlowError):
-    def __init__(self, project_magic: str) -> None:
+    def __init__(self, project_magic: ProjectMagic) -> None:
         super().__init__(f"Google Flow project {project_magic!r} was not found.")
 
 
 class ProjectOpenError(GoogleFlowError):
-    def __init__(self, project_magic: str) -> None:
+    def __init__(self, project_magic: ProjectMagic) -> None:
         super().__init__(f"Google Flow project {project_magic!r} could not be opened.")
 
 
 class ProjectClosedError(GoogleFlowError):
-    def __init__(self, project_magic: str) -> None:
+    def __init__(self, project_magic: ProjectMagic) -> None:
         super().__init__(f"Google Flow project {project_magic!r} is already closed.")
 
 
 class ProjectCloseError(GoogleFlowError):
-    def __init__(self, project_magic: str) -> None:
+    def __init__(self, project_magic: ProjectMagic) -> None:
         super().__init__(
             f"The browser page for Google Flow project {project_magic!r} "
             "could not be closed."
@@ -33,12 +40,12 @@ class ProjectCreationError(GoogleFlowError):
 
 
 class ProjectRenameError(GoogleFlowError):
-    def __init__(self, project_magic: str) -> None:
+    def __init__(self, project_magic: ProjectMagic) -> None:
         super().__init__(f"Google Flow project {project_magic!r} could not be renamed.")
 
 
 class ProjectDeletionError(GoogleFlowError):
-    def __init__(self, project_magic: str) -> None:
+    def __init__(self, project_magic: ProjectMagic) -> None:
         super().__init__(f"Google Flow project {project_magic!r} could not be deleted.")
 
 
@@ -49,3 +56,25 @@ class MediaUploadError(GoogleFlowError):
 class MediaFileReadError(MediaUploadError):
     def __init__(self, file: Path) -> None:
         super().__init__(f"Media file {file!s} could not be read.")
+
+
+class MediaNotFoundError(GoogleFlowError):
+    def __init__(self, media_id: MediaId) -> None:
+        super().__init__(f"Google Flow media {media_id!r} was not found.")
+
+
+class MediaActionError(GoogleFlowError):
+    def __init__(self, media_id: MediaId, action: MediaAction) -> None:
+        super().__init__(f"Google Flow could not {action} media {media_id!r}.")
+
+
+class GenerationSettingsError(GoogleFlowError):
+    """Raised when a requested generation setting cannot be applied."""
+
+
+class GenerationError(GoogleFlowError):
+    """Raised when Google Flow does not complete a generation."""
+
+
+class SceneCreationError(GoogleFlowError):
+    """Raised when Google Flow does not create a usable scene."""

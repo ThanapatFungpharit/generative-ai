@@ -1,0 +1,10 @@
+name: set_agent_mode
+selectors_name: googleflow
+params: pressed
+steps:
+  - wait_for: agent_mode_chip
+  - if:
+      hidden: agent_mode_chip_pressed
+      then:
+        - click: agent_mode_chip
+        - wait_for: agent_mode_chip_pressed

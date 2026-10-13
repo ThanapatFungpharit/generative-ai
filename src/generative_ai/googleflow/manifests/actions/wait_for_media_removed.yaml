@@ -1,0 +1,5 @@
+name: wait_for_media_removed
+selectors_name: googleflow
+params: media_id
+steps:
+  - wait_for: {target: media_tile_by_id, state: detached}

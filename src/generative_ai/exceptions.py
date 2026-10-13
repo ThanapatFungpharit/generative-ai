@@ -1,2 +1,0 @@
-class WebPageClosedError(Exception):
-    pass

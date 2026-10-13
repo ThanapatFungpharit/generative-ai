@@ -1,0 +1,5 @@
+name: wait_for_ingredient
+selectors_name: googleflow
+params: index
+steps:
+  - wait_for: ready_ingredient_chip

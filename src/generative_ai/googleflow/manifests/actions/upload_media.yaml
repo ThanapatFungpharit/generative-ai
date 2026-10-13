@@ -1,0 +1,16 @@
+name: upload_media
+selectors_name: googleflow
+params: files
+steps:
+  - upload:
+      steps:
+        - wait_for: header_add_media_button
+        - click: header_add_media_button
+        - wait_for: header_upload_menu_item
+        - click: header_upload_menu_item
+      files: {param: files}
+  # This consent dialog is legitimately absent for some accounts.
+  - if:
+      visible: {target: consent_agree_button, timeout: 500}
+      then:
+        - click: {target: consent_agree_button, timeout: 500, optional: true}

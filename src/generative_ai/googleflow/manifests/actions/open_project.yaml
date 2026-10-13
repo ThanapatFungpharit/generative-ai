@@ -1,0 +1,5 @@
+name: open_project
+selectors_name: googleflow
+params: project_url
+steps:
+  - goto: "{project_url}"

@@ -1,0 +1,6 @@
+name: open_generation_settings
+selectors_name: googleflow
+steps:
+  - wait_for: settings_trigger
+  - click: settings_trigger
+  - wait_for: settings_panel

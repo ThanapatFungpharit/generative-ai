@@ -1,0 +1,10 @@
+name: new_scene
+selectors_name: googleflow
+params: project_url
+steps:
+  - wait_for: header_add_media_button
+  - click: header_add_media_button
+  - wait_for: new_scene_menu_item
+  - click: new_scene_menu_item
+  - wait_for_url: "{project_url}/scene/*"
+  - get_url: url
