@@ -1,0 +1,13 @@
+name: run_media_menu_item
+selectors_name: googleflow
+params: [media_id, item]
+steps:
+  - if:
+      visible: {target: media_tile_by_id, timeout: 10000}
+      then:
+        - click: {target: media_tile_by_id, button: right}
+      else:
+        - fail: "Google Flow media '{media_id}' was not found."
+  - wait_for: media_menu
+  - click: media_menu_item
+  - wait_for: {target: media_menu, state: hidden}

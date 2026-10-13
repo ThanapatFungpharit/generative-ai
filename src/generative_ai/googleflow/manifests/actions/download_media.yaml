@@ -1,0 +1,32 @@
+name: download_media
+selectors_name: googleflow
+params: [media_id, quality, to]
+steps:
+  - if:
+      visible: {target: media_tile_by_id, timeout: 10000}
+      then:
+        - click: {target: media_tile_by_id, button: right}
+      else:
+        - fail: "Google Flow media '{media_id}' was not found."
+  - wait_for: media_menu
+  - click: media_menu_download
+  - wait_for: download_submenu
+  # An empty quality means the first enabled entry.
+  - if:
+      param: quality
+      then:
+        - if:
+            exists: download_option
+            then:
+              - download: {target: download_option, to: "{to}", timeout: 120000, as: path}
+      else:
+        - if:
+            exists: first_download_option
+            then:
+              - download: {target: first_download_option, to: "{to}", timeout: 120000, as: path}
+  - if:
+      result: path
+      then: []
+      else:
+        - get_all_texts: {target: download_options, exclude: icons, as: available}
+        - fail: "Google Flow does not offer download quality '{quality}'."

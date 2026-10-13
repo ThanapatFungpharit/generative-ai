@@ -1,0 +1,6 @@
+name: confirm_delete_project
+selectors_name: googleflow
+params: [project_path, project_url]
+steps:
+  - click: confirm_delete_project_button
+  - wait_for: {target: project_card, state: detached}

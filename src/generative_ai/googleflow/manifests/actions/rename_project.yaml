@@ -1,0 +1,13 @@
+name: rename_project
+selectors_name: googleflow
+params: [base_url, project_path, project_url, new_name]
+steps:
+  - goto: "{base_url}"
+  - wait_for: project_card
+  - wait_for: project_edit_title_button
+  - click: project_edit_title_button
+  - wait_for: project_title_input
+  - fill: {target: project_title_input, value: "{new_name}"}
+  - press: {target: project_title_input, key: Enter}
+  - wait_for: {target: project_title_input, state: hidden}
+  - wait_for: project_title_named

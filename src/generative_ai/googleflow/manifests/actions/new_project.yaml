@@ -1,0 +1,8 @@
+name: new_project
+selectors_name: googleflow
+params: base_url
+steps:
+  - goto: "{base_url}"
+  - wait_for: new_project_button
+  - click: new_project_button
+  - wait_for: open_add_menu_button

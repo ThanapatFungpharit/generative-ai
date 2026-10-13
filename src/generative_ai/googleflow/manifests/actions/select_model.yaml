@@ -1,0 +1,14 @@
+name: select_model
+selectors_name: googleflow
+params: model
+steps:
+  - click: model_family_button
+  - wait_for: model_menu
+  - if:
+      visible: {target: model_option, timeout: 3000}
+      then:
+        - click: model_option
+        - wait_for: selected_model_button
+      else:
+        - get_all_texts: {target: model_options, exclude: icons, as: available}
+        - fail: "Google Flow does not offer model '{model}'."

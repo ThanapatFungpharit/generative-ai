@@ -1,0 +1,5 @@
+name: read_generation_settings
+selectors_name: googleflow
+steps:
+  - get_all_texts: {target: checked_setting_options, exclude: icons, as: checked}
+  - get_text: {target: model_family_button, exclude: icons, as: model}

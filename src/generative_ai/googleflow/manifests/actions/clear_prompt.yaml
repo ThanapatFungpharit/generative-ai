@@ -1,0 +1,8 @@
+name: clear_prompt
+selectors_name: googleflow
+steps:
+  - if:
+      visible: clear_prompt_button
+      then:
+        - click: clear_prompt_button
+        - wait_for: {target: clear_prompt_button, state: hidden}

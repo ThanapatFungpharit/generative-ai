@@ -1,0 +1,13 @@
+name: restore_from_bin
+selectors_name: googleflow
+params: [trash_url, media_id]
+steps:
+  - goto: "{trash_url}"
+  - if:
+      visible: {target: media_tile_by_id, timeout: 10000}
+      then:
+        - hover: media_tile_by_id
+        - click: media_tile_restore_button
+        - wait_for: {target: media_tile_by_id, state: detached}
+      else:
+        - fail: "Google Flow media '{media_id}' was not found in the bin."

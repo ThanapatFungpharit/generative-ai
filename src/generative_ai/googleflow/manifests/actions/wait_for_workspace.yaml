@@ -1,0 +1,4 @@
+name: wait_for_workspace
+selectors_name: googleflow
+steps:
+  - wait_for: prompt_editor

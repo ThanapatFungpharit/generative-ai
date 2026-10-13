@@ -1,0 +1,68 @@
+name: googleflow
+selectors:
+  # Projects page. A card is found by the link to its project.
+  new_project_button: .new-project-button
+  project_card: '.project-card:has(a[href="{project_path:string}"], a[href="{project_url:string}"])'
+  project_title_input: '.project-card:has(a[href="{project_path:string}"], a[href="{project_url:string}"]) .title-input'
+  project_edit_title_button: '.project-card:has(a[href="{project_path:string}"], a[href="{project_url:string}"]) .project-title-label button'
+  project_title_named: '.project-card:has(a[href="{project_path:string}"], a[href="{project_url:string}"]) .project-title-label >> text="{new_name:string}"'
+  project_delete_button: '.project-card:has(a[href="{project_path:string}"], a[href="{project_url:string}"]) button[aria-label="Delete project"]'
+  confirm_delete_project_button: "flow-confirmation-dialog mat-dialog-actions button:has(span:text-is('Delete project'))"
+
+  # Workspace header
+  header_add_media_button: "button[aria-label='Add media menu']"
+  header_upload_menu_item: ".cdk-overlay-container [role='menuitem']:has-text('Upload')"
+  new_scene_menu_item: ".cdk-overlay-container [role='menuitem']:has-text('New scene')"
+
+  # Prompt box. The ingredient trigger is not rendered in video Frames mode,
+  # so the editor is what marks a loaded workspace.
+  prompt_editor: "flow-base-prompt-box .ProseMirror[contenteditable='true']"
+  clear_prompt_button: "flow-base-prompt-box button[aria-label='Clear prompt']"
+  generate_button: "flow-base-prompt-box button.generate-icon-button"
+  agent_mode_chip: "flow-base-prompt-box button.agent-mode-chip"
+  agent_mode_chip_pressed: "flow-base-prompt-box button.agent-mode-chip[aria-pressed='{pressed:string}']"
+  ingredient_chip: "flow-prompt-box flow-ingredient-chip"
+  ready_ingredient_chip: "flow-prompt-box flow-ingredient-chip >> nth={index} >> [aria-busy='false']"
+  # {slot} is the empty slot's label: Start or End.
+  frame_slot: "flow-ingredient-bar button.empty-chip:text-is('{slot:string}')"
+  swap_frames_button: "button[aria-label='Swap first and last frames']"
+  open_add_menu_button: .add-menu-trigger
+
+  # Generation settings popover
+  settings_trigger: "flow-base-prompt-box button.settings-trigger-button"
+  settings_panel: flow-prompt-box-settings
+  model_family_button: "flow-prompt-box-settings button[aria-label='Select model family']"
+  selected_model_button: "flow-prompt-box-settings button[aria-label='Select model family']:has-text('{model:string}')"
+  setting_options: "flow-prompt-box-settings >> role=radio"
+  checked_setting_options: "flow-prompt-box-settings >> role=radio[checked=true]"
+  setting_option: 'flow-prompt-box-settings >> role=radio[name=/(?:^|\s){label:regex}$/] >> nth=0'
+  checked_setting_option: 'flow-prompt-box-settings >> role=radio[name=/(?:^|\s){label:regex}$/][checked=true] >> nth=0'
+  model_menu: ".cdk-overlay-container [role='menu'] >> nth=-1"
+  model_options: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem"
+  model_option: '.cdk-overlay-container [role=''menu''] >> nth=-1 >> role=menuitem[name=/(?:^|\s){model:regex}$/] >> nth=0'
+
+  # Asset picker, shared by ingredients, frame slots and scene clips
+  add_menu_popover: flow-add-menu-popover-content
+  picker_asset: 'flow-add-menu-popover-content flow-add-menu-asset-item:has(img[src*="/{media_id:string}"]) >> nth=0'
+
+  # Media grid
+  media_tile: flow-grid-tile-container
+  pending_tile: flow-pending-tile
+  media_tile_by_id: 'flow-grid-tile-container:has([data-media-id="{media_id:string}"])'
+  media_tile_restore_button: 'flow-grid-tile-container:has([data-media-id="{media_id:string}"]) >> role=button[name="Restore"s]'
+
+  # A tile's context menu (it mirrors More options) and its Download submenu
+  media_menu: ".cdk-overlay-container [role='menu'] >> nth=0"
+  media_menu_item: '.cdk-overlay-container [role=''menu''] >> nth=0 >> role=menuitem[name=/(?:^|\s){item:regex}$/]'
+  media_menu_download: '.cdk-overlay-container [role=''menu''] >> nth=0 >> role=menuitem[name=/(?:^|\s)Download$/]'
+  download_submenu: ".cdk-overlay-container [role='menu'] >> nth=1"
+  download_options: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem[disabled=false]"
+  first_download_option: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem[disabled=false] >> nth=0"
+  download_option: '.cdk-overlay-container [role=''menu''] >> nth=1 >> role=menuitem[name=/^{quality:regex}\b/][disabled=false] >> nth=0'
+
+  # Shared overlays
+  overlay_menu: ".cdk-overlay-container [role='menu']"
+  visible_snackbars: "mat-snack-bar-container >> visible=true"
+  consent_agree_button: "role=button[name='I agree']"
+  # Material icons render as ligature text ("crop_16_9"); left out of labels.
+  icons: mat-icon

@@ -1,0 +1,6 @@
+name: fill_prompt
+selectors_name: googleflow
+params: prompt
+steps:
+  - fill: {target: prompt_editor, value: "{prompt}"}
+  - get_text: {target: prompt_editor, as: text}

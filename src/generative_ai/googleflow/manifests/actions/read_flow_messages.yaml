@@ -1,0 +1,4 @@
+name: read_flow_messages
+selectors_name: googleflow
+steps:
+  - get_all_texts: {target: visible_snackbars, exclude: icons, as: messages}

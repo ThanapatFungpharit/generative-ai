@@ -16,6 +16,8 @@ name = "generative-ai"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "playwright" },
+    { name = "pyyaml" },
     { name = "web-page" },
 ]
 
@@ -27,7 +29,11 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "web-page", git = "https://github.com/ThanapatFungpharit/web-page?branch=main" }]
+requires-dist = [
+    { name = "playwright", specifier = ">=1.63.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "web-page", git = "https://github.com/ThanapatFungpharit/web-page?rev=main" },
+]
 
 [package.metadata.requires-dev]
 dev = [
@@ -211,9 +217,8 @@ wheels = [
 [[package]]
 name = "web-page"
 version = "0.1.0"
-source = { git = "https://github.com/ThanapatFungpharit/web-page?branch=main#65eaa70c670100c174d5750746f9be312b8d1353" }
+source = { git = "https://github.com/ThanapatFungpharit/web-page?rev=main#f31998167489a2d7b2b5d8096e36842a3034e392" }
 dependencies = [
     { name = "aiofiles" },
-    { name = "playwright" },
     { name = "pyyaml" },
 ]

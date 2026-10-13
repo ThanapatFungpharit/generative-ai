@@ -1,19 +1,17 @@
  [project]
 name = "generative-ai"
 version = "0.1.0"
-description = "Add your description here"
+description = "Async Playwright automation for Google Flow"
 readme = "README.md"
 authors = [
     { name = "ThanapatFungpharit", email = "thanapatsun.pro@gmail.com" }
 ]
 requires-python = ">=3.14"
-dependencies = ["web-page"]
-
-[tool.uv.sources]
-web-page = { git = "https://github.com/ThanapatFungpharit/web-page", branch = "main" }
-
-[project.scripts]
-generative-ai = "generative_ai:main"
+dependencies = [
+    "playwright>=1.63.0",
+    "pyyaml>=6.0.3",
+    "web-page @ git+https://github.com/ThanapatFungpharit/web-page@main",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]
@@ -29,5 +27,5 @@ dev = [
 [tool.uvs.scripts]
 format = "ruff format"
 lint = "ruff check --fix"
-typecheck = "ty check"
+typecheck = "ty check --fix --error all"
 check = ["format", "lint", "typecheck"]
