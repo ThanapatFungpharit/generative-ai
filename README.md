@@ -59,3 +59,28 @@ offers.
 Selectors and linear UI flows live in `src/generative_ai/googleflow/manifests/`.
 Pages are kept at least 1280×720 because narrower viewports switch Flow to a
 mobile layout with different controls.
+
+## Adding a site
+
+Site-independent code lives in `generative_ai.site`; `googleflow` is the
+reference implementation. A new site `foo` needs:
+
+1. `src/generative_ai/foo/manifests/selectors.yaml` and
+   `manifests/actions/*.yaml` — `web_page` selectors and linear UI flows.
+2. `foo/constants.py` — a `Site` registered with `register_site`:
+
+   ```python
+   SITE = register_site(
+       Site(name="foo", base_url="https://foo.example/", manifests_dir=_MANIFESTS_DIR)
+   )
+   ```
+
+   `Site.attach(page)` sets timeouts and a minimum viewport, then loads every
+   manifest; `get_site("foo")` finds it by name.
+3. `foo/exceptions.py` — errors deriving from `SiteError`.
+4. `foo/page.py` — a `SitePage` subclass. Implement `_closed_error`, decorate
+   public operations with `@page_required` (serialises operations and requires
+   a live page), build instances with `await SITE.attach(page)`, and use
+   `close_page_and_report_failure` / `note_cleanup_failure` in constructors'
+   failure paths.
+5. Re-export the public names from `foo/__init__.py`.

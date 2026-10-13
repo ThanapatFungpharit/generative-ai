@@ -1,24 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from web_page.utils import is_str_dict
-from yaml import safe_load
-
-from generative_ai.googleflow.guards import is_str_keyed_mapping
+from generative_ai.site import Site, register_site
 
 if TYPE_CHECKING:
-    from web_page.types import CssSelector, Milliseconds, RawYaml, SelectorKey
+    from web_page.types import Milliseconds
 
-    from generative_ai.googleflow.types import (
-        Pixels,
-        Seconds,
-        Url,
-    )
+    from generative_ai.site.types import Pixels, Seconds, Url
 
 _MANIFESTS_DIR: Final = Path(__file__).parent / "manifests"
 
@@ -32,23 +23,12 @@ class _GoogleFlowUrls:
 
 
 @dataclass(frozen=True, slots=True)
-class _Manifests:
-    selectors: Path = _MANIFESTS_DIR / "selectors.yaml"
-    actions: tuple[Path, ...] = field(
-        default_factory=lambda: tuple(
-            sorted((_MANIFESTS_DIR / "actions").glob("*.yaml"))
-        )
-    )
-
-
-@dataclass(frozen=True, slots=True)
 class _Configs:
     MENU_CLOSE_MAX_ATTEMPTS: int = 3
     MENU_CLOSE_RETRY_TIMEOUT_MS: Milliseconds = 300.0
     UPLOAD_TIMEOUT_SECONDS: Seconds = 30.0
     NAVIGATION_TIMEOUT_MS: Milliseconds = 30_000.0
     RECOVERY_TIMEOUT_SECONDS: Seconds = 5.0
-    CLEANUP_TIMEOUT_SECONDS: Seconds = 2.0
     POLL_INTERVAL_SECONDS: Seconds = 1.0
     GENERATION_START_TIMEOUT_SECONDS: Seconds = 30.0
     GENERATION_FAILURE_GRACE_SECONDS: Seconds = 5.0
@@ -62,19 +42,16 @@ class _Configs:
     MIN_VIEWPORT_HEIGHT: Pixels = 720
 
 
-def _load_selectors(path: Path) -> Mapping[SelectorKey, CssSelector]:
-    """Read the selectors manifest so Python-side locators share one source."""
-    manifest: RawYaml = safe_load(path.read_text(encoding="utf-8"))
-    selectors: RawYaml = (
-        manifest.get("selectors") if is_str_keyed_mapping(manifest) else None
-    )
-    if not is_str_dict(selectors):
-        msg = f"{path} must map 'selectors' to a mapping of strings to strings."
-        raise TypeError(msg)
-    return MappingProxyType(selectors)
-
-
 URLS: Final = _GoogleFlowUrls()
-MANIFESTS: Final = _Manifests()
-SELECTORS: Final = _load_selectors(MANIFESTS.selectors)
 CONFIGS: Final = _Configs()
+SITE: Final = register_site(
+    Site(
+        name="googleflow",
+        base_url=URLS.base,
+        manifests_dir=_MANIFESTS_DIR,
+        navigation_timeout_ms=CONFIGS.NAVIGATION_TIMEOUT_MS,
+        min_viewport_width=CONFIGS.MIN_VIEWPORT_WIDTH,
+        min_viewport_height=CONFIGS.MIN_VIEWPORT_HEIGHT,
+    )
+)
+SELECTORS: Final = SITE.load_selectors()

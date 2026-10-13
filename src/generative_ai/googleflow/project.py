@@ -5,19 +5,17 @@ import mimetypes
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Concatenate, Final, Self, TypedDict, TypeIs
+from typing import TYPE_CHECKING, Final, Self, TypedDict, TypeIs, override
 from urllib.parse import urlparse
 from uuid import uuid4
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-from web_page import WebPage
 from web_page.exceptions import ActionFailed
 from web_page.utils import is_str_list
 
-from generative_ai.googleflow.constants import CONFIGS, MANIFESTS, SELECTORS, URLS
+from generative_ai.googleflow.constants import CONFIGS, SELECTORS, SITE, URLS
 from generative_ai.googleflow.exceptions import (
     GenerationError,
     GenerationSettingsError,
@@ -35,7 +33,6 @@ from generative_ai.googleflow.exceptions import (
     ProjectRenameError,
     SceneCreationError,
 )
-from generative_ai.googleflow.guards import is_list, is_str_keyed_mapping
 from generative_ai.googleflow.models import (
     GenerationMode,
     GenerationSettings,
@@ -50,15 +47,24 @@ from generative_ai.googleflow.utils import (
     project_magic_from_url,
     scene_id_from_url,
 )
+from generative_ai.site import (
+    SitePage,
+    UnexpectedPageStateError,
+    close_page_and_report_failure,
+    note_cleanup_failure,
+    page_required,
+    text_result,
+    texts_result,
+)
+from generative_ai.site.guards import is_list, is_str_keyed_mapping
+from generative_ai.site.page import CLEANUP_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
     from collections.abc import Set as AbstractSet
 
-    from web_page import FilePayload
-    from web_page.types import ParamName, ResultName
+    from web_page import FilePayload, WebPage
+    from web_page.types import ParamName
 
-    from generative_ai.googleflow.protocols import BrowserContext, FlowPage
     from generative_ai.googleflow.types import (
         AspectRatio,
         FrameSlot,
@@ -72,19 +78,14 @@ if TYPE_CHECKING:
         ProjectMagic,
         PromptText,
         QualityLabel,
-        RawJson,
         SceneId,
-        Seconds,
         SettingField,
         SettingLabel,
         TileLabel,
         UploadToken,
-        Url,
     )
-
-
-class _UnexpectedProjectStateError(RuntimeError):
-    """An expected Flow UI postcondition was not reached."""
+    from generative_ai.site import BrowserContext, BrowserPage
+    from generative_ai.site.types import RawJson, Seconds, Url
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,25 +101,7 @@ class _Tile:
         return None if self.item.pending else self.item.media_id
 
 
-def _page_required[**P, R](
-    method: Callable[Concatenate[GoogleFlowProject, P], Awaitable[R]],
-) -> Callable[Concatenate[GoogleFlowProject, P], Awaitable[R]]:
-    """Enforce the live-page invariant for public async operations."""
-
-    @wraps(method)
-    async def guarded(
-        project: GoogleFlowProject,
-        *args: P.args,
-        **kwargs: P.kwargs,
-    ) -> R:
-        async with project._operation_lock:
-            project._require_page()
-            return await method(project, *args, **kwargs)
-
-    return guarded
-
-
-class GoogleFlowProject:
+class GoogleFlowProject(SitePage):
     """A domain facade for one Google Flow project browser page.
 
     Use :meth:`open` or :meth:`new` to construct an instance. Linear UI flows
@@ -127,20 +110,14 @@ class GoogleFlowProject:
     media-scoped locators, file choosers, branching, and polling).
     """
 
-    __slots__ = (
-        "_operation_lock",
-        "_page",
-        "_project_magic",
-        "_project_url",
-        "_web_page",
-    )
+    __slots__ = ("_project_magic", "_project_url")
 
-    def __init__(self, project_magic: str, page: FlowPage, web_page: WebPage) -> None:
+    def __init__(
+        self, project_magic: str, page: BrowserPage, web_page: WebPage
+    ) -> None:
+        super().__init__(page, web_page)
         self._project_magic = normalize_project_magic(project_magic)
         self._project_url = f"{URLS.project}{self._project_magic}"
-        self._page: FlowPage | None = page
-        self._web_page = web_page
-        self._operation_lock = asyncio.Lock()
 
     @property
     def project_magic(self) -> ProjectMagic:
@@ -152,11 +129,6 @@ class GoogleFlowProject:
         """The canonical browser URL for this project."""
         return self._project_url
 
-    @property
-    def is_closed(self) -> bool:
-        """Whether this facade no longer has a usable browser page."""
-        return self._page is None or self._page.is_closed()
-
     @classmethod
     async def open(cls, project_magic: str, context: BrowserContext) -> Self:
         """Open an existing project by its Flow identifier.
@@ -167,11 +139,11 @@ class GoogleFlowProject:
                 does not produce a usable project workspace.
         """
         project_magic = normalize_project_magic(project_magic)
-        page: FlowPage | None = None
+        page: BrowserPage | None = None
 
         try:
             page = await context.new_page()
-            project = cls(project_magic, page, await _attach_web_page(page))
+            project = cls(project_magic, page, await SITE.attach(page))
             await project._web_page.run(
                 "open_project", {"project_url": project.project_url}
             )
@@ -182,15 +154,15 @@ class GoogleFlowProject:
             failure = ProjectOpenError(project_magic)
             if page is not None:
                 was_not_found = is_not_found_url(page.url)
-                cleanup_error = await _close_page_and_report_failure(page)
+                cleanup_error = await close_page_and_report_failure(page)
                 if was_not_found:
                     failure = ProjectNotFoundError(project_magic)
-                _note_cleanup_failure(failure, cleanup_error)
+                note_cleanup_failure(failure, cleanup_error)
             raise failure from error
         except BaseException as error:
             if page is not None:
-                cleanup_error = await _close_page_and_report_failure(page)
-                _note_cleanup_failure(error, cleanup_error)
+                cleanup_error = await close_page_and_report_failure(page)
+                note_cleanup_failure(error, cleanup_error)
             raise
         return project
 
@@ -202,11 +174,11 @@ class GoogleFlowProject:
             ProjectCreationError: The creation controls or resulting project
                 URL cannot be resolved.
         """
-        page: FlowPage | None = None
+        page: BrowserPage | None = None
 
         try:
             page = await context.new_page()
-            web_page = await _attach_web_page(page)
+            web_page = await SITE.attach(page)
             await web_page.run("new_project", {"base_url": URLS.base})
             return cls(project_magic_from_url(page.url), page, web_page)
         except PlaywrightTimeoutError as error:
@@ -214,22 +186,22 @@ class GoogleFlowProject:
                 "Timed out while waiting for Google Flow to create a project."
             )
             if page is not None:
-                cleanup_error = await _close_page_and_report_failure(page)
-                _note_cleanup_failure(failure, cleanup_error)
+                cleanup_error = await close_page_and_report_failure(page)
+                note_cleanup_failure(failure, cleanup_error)
             raise failure from error
         except PlaywrightError as error:
             failure = ProjectCreationError("Google Flow could not create a project.")
             if page is not None:
-                cleanup_error = await _close_page_and_report_failure(page)
-                _note_cleanup_failure(failure, cleanup_error)
+                cleanup_error = await close_page_and_report_failure(page)
+                note_cleanup_failure(failure, cleanup_error)
             raise failure from error
         except BaseException as error:
             if page is not None:
-                cleanup_error = await _close_page_and_report_failure(page)
-                _note_cleanup_failure(error, cleanup_error)
+                cleanup_error = await close_page_and_report_failure(page)
+                note_cleanup_failure(error, cleanup_error)
             raise
 
-    @_page_required
+    @page_required
     async def close(self) -> None:
         """Close the project page and make this facade unusable.
 
@@ -247,7 +219,7 @@ class GoogleFlowProject:
         if not page.is_closed():
             raise ProjectCloseError(self.project_magic)
 
-    @_page_required
+    @page_required
     async def rename(self, new_name: str) -> None:
         """Rename this project and return its page to the project workspace.
 
@@ -273,12 +245,12 @@ class GoogleFlowProject:
                 },
             )
             await self._return_to_workspace()
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = ProjectRenameError(self.project_magic)
             await self._restore_project_page_after_failure(failure)
             raise failure from error
 
-    @_page_required
+    @page_required
     async def delete(self) -> None:
         """Permanently delete this project and close its browser page.
 
@@ -301,7 +273,7 @@ class GoogleFlowProject:
             confirmation_attempted = True
             await self._web_page.run("confirm_delete_project", card_params)
             await self._verify_deletion(page)
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = ProjectDeletionError(self.project_magic)
             if confirmation_attempted:
                 failure.add_note(
@@ -309,15 +281,15 @@ class GoogleFlowProject:
                     "deletion could not be verified; the project state is unknown."
                 )
                 self._page = None
-                cleanup_error = await _close_page_and_report_failure(page)
-                _note_cleanup_failure(failure, cleanup_error)
+                cleanup_error = await close_page_and_report_failure(page)
+                note_cleanup_failure(failure, cleanup_error)
             else:
                 await self._restore_project_page_after_failure(failure)
             raise failure from error
 
         # The remote deletion has been verified. The facade must not be reused.
         self._page = None
-        cleanup_error = await _close_page_and_report_failure(page)
+        cleanup_error = await close_page_and_report_failure(page)
         if cleanup_error is not None:
             failure = ProjectCloseError(self.project_magic)
             failure.add_note(
@@ -325,7 +297,7 @@ class GoogleFlowProject:
             )
             raise failure from cleanup_error
 
-    @_page_required
+    @page_required
     async def upload_media(self, files: Iterable[Path]) -> Mapping[Path, MediaId]:
         """Upload media and return a mapping from each path to its Flow media ID.
 
@@ -371,7 +343,7 @@ class GoogleFlowProject:
             media_id_by_token = await self._wait_for_uploaded_media(
                 kind_by_token, known_ids
             )
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = MediaUploadError("Google Flow could not upload the media.")
             operation_error = failure
             raise failure from error
@@ -396,7 +368,7 @@ class GoogleFlowProject:
             file_by_token[token]: media_id_by_token[token] for token in file_by_token
         }
 
-    @_page_required
+    @page_required
     async def list_media(self) -> tuple[MediaItem, ...]:
         """Return the tiles currently rendered in the project's media grid.
 
@@ -407,12 +379,12 @@ class GoogleFlowProject:
             await self._ensure_on_workspace()
             await self._web_page.run("wait_for_workspace")
             return tuple(tile.item for tile in await self._snapshot_media())
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = GoogleFlowError("Google Flow media could not be listed.")
             await self._restore_project_page_after_failure(failure)
             raise failure from error
 
-    @_page_required
+    @page_required
     async def get_generation_settings(self) -> GenerationSettings:
         """Read the prompt box's current mode, model, aspect ratio and outputs.
 
@@ -422,14 +394,14 @@ class GoogleFlowProject:
         try:
             await self._ensure_on_workspace()
             return await self._read_settings()
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = GenerationSettingsError(
                 "Google Flow generation settings could not be read."
             )
             await self._close_overlays_noting_failure(failure)
             raise failure from error
 
-    @_page_required
+    @page_required
     async def configure(self, settings: GenerationSettings) -> None:
         """Apply ``settings`` to the prompt box; ``None`` fields are left as is.
 
@@ -442,7 +414,7 @@ class GoogleFlowProject:
         try:
             await self._ensure_on_workspace()
             await self._apply_settings(settings)
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = GenerationSettingsError(
                 "Google Flow generation settings could not be applied."
             )
@@ -452,7 +424,7 @@ class GoogleFlowProject:
             await self._close_overlays_noting_failure(error)
             raise
 
-    @_page_required
+    @page_required
     async def set_agent_mode(self, enabled: bool) -> None:
         """Turn the prompt box's Agent mode on or off.
 
@@ -462,12 +434,12 @@ class GoogleFlowProject:
         try:
             await self._ensure_on_workspace()
             await self._set_agent_mode(enabled)
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             raise GenerationSettingsError(
                 "Google Flow Agent mode could not be changed."
             ) from error
 
-    @_page_required
+    @page_required
     async def generate_image(
         self,
         prompt: PromptText,
@@ -508,7 +480,7 @@ class GoogleFlowProject:
             ),
         )
 
-    @_page_required
+    @page_required
     async def generate_video(
         self,
         prompt: PromptText,
@@ -570,7 +542,7 @@ class GoogleFlowProject:
             ),
         )
 
-    @_page_required
+    @page_required
     async def reuse_prompt(self, media_id: MediaId) -> PromptText:
         """Load a media item's prompt and settings into the prompt box.
 
@@ -586,7 +558,7 @@ class GoogleFlowProject:
             await self._ensure_on_workspace()
             # Start empty so the wait below observes Flow's text, not leftovers.
             await self._clear_prompt()
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             raise MediaActionError(media_id, "reuse the prompt of") from error
         await self._run_media_menu_action(
             media_id, "Reuse prompt", "reuse the prompt of"
@@ -597,7 +569,7 @@ class GoogleFlowProject:
         except PlaywrightError as error:
             raise MediaActionError(media_id, "reuse the prompt of") from error
 
-    @_page_required
+    @page_required
     async def toggle_favourite(self, media_id: MediaId) -> None:
         """Toggle the favourite flag of a media item.
 
@@ -609,7 +581,7 @@ class GoogleFlowProject:
             normalize_media_id(media_id), "Favourite", "favourite"
         )
 
-    @_page_required
+    @page_required
     async def set_project_cover(self, media_id: MediaId) -> None:
         """Use a media item as the project's cover on the projects page.
 
@@ -621,7 +593,7 @@ class GoogleFlowProject:
             normalize_media_id(media_id), "Set project cover", "set as cover"
         )
 
-    @_page_required
+    @page_required
     async def move_to_bin(self, media_id: MediaId) -> None:
         """Move a media item to the project's bin, where it can be restored.
 
@@ -636,7 +608,7 @@ class GoogleFlowProject:
         except PlaywrightError as error:
             raise MediaActionError(media_id, "move to bin") from error
 
-    @_page_required
+    @page_required
     async def restore_from_bin(self, media_id: MediaId) -> None:
         """Restore a binned media item and return to the project workspace.
 
@@ -651,7 +623,7 @@ class GoogleFlowProject:
                 {"trash_url": f"{self.project_url}/trash", "media_id": media_id},
             )
             await self._return_to_workspace()
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = MediaActionError(media_id, "restore")
             await self._restore_project_page_after_failure(failure)
             raise failure from error
@@ -660,7 +632,7 @@ class GoogleFlowProject:
             await self._restore_project_page_after_failure(failure)
             raise failure from error
 
-    @_page_required
+    @page_required
     async def download_media(
         self,
         media_id: MediaId,
@@ -690,15 +662,15 @@ class GoogleFlowProject:
                     "to": str(destination),
                 },
             )
-            target = Path(_text_result(results, "path"))
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+            target = Path(text_result(results, "path"))
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = MediaActionError(media_id, "download")
             await self._close_overlays_noting_failure(failure)
             raise failure from error
         except ActionFailed as error:
             if "available" in error.results:
                 failure = MediaActionError(media_id, f"download {quality!r} of")
-                available = _texts_result(error.results, "available")
+                available = texts_result(error.results, "available")
                 failure.add_note(f"Available downloads: {', '.join(available)}.")
             else:
                 failure = MediaNotFoundError(media_id)
@@ -708,7 +680,7 @@ class GoogleFlowProject:
         await self._close_overlays()
         return target
 
-    @_page_required
+    @page_required
     async def create_scene(self) -> SceneId:
         """Create an empty scene, return to the workspace, and return its ID.
 
@@ -721,22 +693,20 @@ class GoogleFlowProject:
                 "new_scene", {"project_url": self.project_url}
             )
             scene_id = scene_id_from_url(
-                _text_result(results, "url"), self.project_magic
+                text_result(results, "url"), self.project_magic
             )
             if scene_id is None:
-                raise _UnexpectedProjectStateError("Flow left the new scene page.")
+                raise UnexpectedPageStateError("Flow left the new scene page.")
             await self._return_to_workspace()
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = SceneCreationError("Google Flow could not create a scene.")
             await self._restore_project_page_after_failure(failure)
             raise failure from error
         return scene_id
 
-    def _require_page(self) -> FlowPage:
-        page = self._page
-        if page is None or page.is_closed():
-            raise ProjectClosedError(self.project_magic)
-        return page
+    @override
+    def _closed_error(self) -> Exception:
+        return ProjectClosedError(self.project_magic)
 
     def _project_card_params(self) -> Mapping[ParamName, str]:
         """Params for the selectors that find this project's card by its link."""
@@ -750,7 +720,7 @@ class GoogleFlowProject:
         await self._web_page.run("open_project", {"project_url": self.project_url})
         await self._web_page.run("wait_for_workspace")
         if not is_project_url(self._require_page().url, self.project_magic):
-            raise _UnexpectedProjectStateError(
+            raise UnexpectedPageStateError(
                 "Flow did not return to the expected project workspace."
             )
 
@@ -775,10 +745,10 @@ class GoogleFlowProject:
                 f"{type(recovery_error).__name__}: {recovery_error}"
             )
             self._page = None
-            cleanup_error = await _close_page_and_report_failure(page)
-            _note_cleanup_failure(operation_error, cleanup_error)
+            cleanup_error = await close_page_and_report_failure(page)
+            note_cleanup_failure(operation_error, cleanup_error)
 
-    async def _verify_deletion(self, page: FlowPage) -> None:
+    async def _verify_deletion(self, page: BrowserPage) -> None:
         """Verify that the project URL resolves to Flow's not-found route."""
         # Card removal can be an optimistic UI update, so independently load
         # the former project URL and verify its remote postcondition.
@@ -798,7 +768,7 @@ class GoogleFlowProject:
                     raise
 
         if not is_not_found_url(page.url):
-            raise _UnexpectedProjectStateError(
+            raise UnexpectedPageStateError(
                 "Flow did not redirect the deleted project to its 404 route."
             )
 
@@ -813,7 +783,7 @@ class GoogleFlowProject:
             [SELECTORS["media_tile"], SELECTORS["pending_tile"], URLS.media_content],
         )
         if not is_list(raw_tiles):
-            raise _UnexpectedProjectStateError("The media grid snapshot is not a list.")
+            raise UnexpectedPageStateError("The media grid snapshot is not a list.")
         return tuple(_tile_from_raw(raw_tile) for raw_tile in raw_tiles)
 
     async def _known_media_ids(self) -> frozenset[MediaId]:
@@ -913,7 +883,7 @@ class GoogleFlowProject:
                 await self._add_ingredient(media_id)
             await self._fill_prompt(prompt)
             return await self._submit_generation(timeout, expected_kind=expected_kind)
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = GenerationError("Google Flow could not run the generation.")
             await self._note_flow_message(failure)
             await self._close_overlays_noting_failure(failure)
@@ -930,14 +900,14 @@ class GoogleFlowProject:
     async def _read_settings(self) -> GenerationSettings:
         await self._web_page.run("open_generation_settings")
         results = await self._web_page.run("read_generation_settings")
-        model = _text_result(results, "model")
+        model = text_result(results, "model")
         await self._close_overlays()
 
         mode: GenerationMode | None = None
         video_input: VideoInput | None = None
         aspect_ratio: AspectRatio | None = None
         outputs: OutputCount | None = None
-        for label in _texts_result(results, "checked"):
+        for label in texts_result(results, "checked"):
             if label in GenerationMode:
                 mode = GenerationMode(label)
             elif label in VideoInput:
@@ -977,7 +947,7 @@ class GoogleFlowProject:
         try:
             await self._web_page.run("select_setting", {"label": label})
         except ActionFailed as error:
-            available = _texts_result(error.results, "available")
+            available = texts_result(error.results, "available")
             raise GenerationSettingsError(
                 f"Google Flow does not offer {field} {label!r} here; "
                 f"available options: {', '.join(available)}."
@@ -987,7 +957,7 @@ class GoogleFlowProject:
         try:
             await self._web_page.run("select_model", {"model": model})
         except ActionFailed as error:
-            available = _texts_result(error.results, "available")
+            available = texts_result(error.results, "available")
             raise GenerationSettingsError(
                 f"Google Flow does not offer model {model!r} here; "
                 f"available models: {', '.join(available)}."
@@ -1025,7 +995,7 @@ class GoogleFlowProject:
 
     async def _fill_prompt(self, prompt: PromptText) -> None:
         results = await self._web_page.run("fill_prompt", {"prompt": prompt})
-        if _text_result(results, "text").split() != prompt.split():
+        if text_result(results, "text").split() != prompt.split():
             raise GenerationError("Google Flow did not accept the prompt text.")
 
     async def _submit_generation(
@@ -1118,7 +1088,7 @@ class GoogleFlowProject:
             await self._web_page.run(
                 "run_media_menu_item", {"media_id": media_id, "item": item_label}
             )
-        except (PlaywrightError, _UnexpectedProjectStateError) as error:
+        except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = MediaActionError(media_id, action)
             await self._note_flow_message(failure)
             await self._close_overlays_noting_failure(failure)
@@ -1134,7 +1104,7 @@ class GoogleFlowProject:
             results = await self._web_page.run("read_flow_messages")
         except PlaywrightError:
             return
-        for message in _texts_result(results, "messages"):
+        for message in texts_result(results, "messages"):
             error.add_note(f"Google Flow reported: {message}")
 
     async def _close_overlays(self) -> None:
@@ -1162,11 +1132,11 @@ class GoogleFlowProject:
                     raise
 
         if await open_overlays.count() != 0:
-            raise _UnexpectedProjectStateError("Flow overlays could not be closed.")
+            raise UnexpectedPageStateError("Flow overlays could not be closed.")
 
     async def _close_overlays_and_report_failure(self) -> Exception | None:
         try:
-            async with asyncio.timeout(CONFIGS.CLEANUP_TIMEOUT_SECONDS):
+            async with asyncio.timeout(CLEANUP_TIMEOUT_SECONDS):
                 await self._close_overlays()
         except Exception as error:  # noqa: BLE001 - returned to the caller
             return error
@@ -1255,51 +1225,6 @@ class _RawTile(TypedDict):
     pending: bool
 
 
-async def _attach_web_page(page: FlowPage) -> WebPage:
-    """Wrap ``page`` in a ``WebPage`` with every Google Flow manifest loaded."""
-    # Steps without their own manifest ``timeout`` use the page defaults.
-    page.set_default_timeout(CONFIGS.NAVIGATION_TIMEOUT_MS)
-    page.set_default_navigation_timeout(CONFIGS.NAVIGATION_TIMEOUT_MS)
-
-    viewport = page.viewport_size
-    if viewport is not None and (
-        viewport["width"] < CONFIGS.MIN_VIEWPORT_WIDTH
-        or viewport["height"] < CONFIGS.MIN_VIEWPORT_HEIGHT
-    ):
-        await page.set_viewport_size(
-            {
-                "width": max(viewport["width"], CONFIGS.MIN_VIEWPORT_WIDTH),
-                "height": max(viewport["height"], CONFIGS.MIN_VIEWPORT_HEIGHT),
-            }
-        )
-
-    web_page = WebPage(page)
-    await web_page.load_selectors(MANIFESTS.selectors)
-    for action in MANIFESTS.actions:
-        await web_page.load_action(action)
-    return web_page
-
-
-def _text_result(results: Mapping[ResultName, object], name: ResultName) -> str:
-    """Return a text value saved by a manifest retrieval step."""
-    value = results[name]
-    if not isinstance(value, str):
-        raise _UnexpectedProjectStateError(f"Manifest result {name!r} is not text.")
-    return value
-
-
-def _texts_result(
-    results: Mapping[ResultName, object], name: ResultName
-) -> tuple[str, ...]:
-    """Return the texts saved by a manifest ``get_all_texts`` step."""
-    value = results[name]
-    if not is_str_list(value):
-        raise _UnexpectedProjectStateError(
-            f"Manifest result {name!r} is not a list of texts."
-        )
-    return tuple(value)
-
-
 def _is_raw_tile(value: RawJson) -> TypeIs[_RawTile]:
     if not is_str_keyed_mapping(value):
         return False
@@ -1315,7 +1240,7 @@ def _is_raw_tile(value: RawJson) -> TypeIs[_RawTile]:
 
 def _tile_from_raw(raw_tile: RawJson) -> _Tile:
     if not _is_raw_tile(raw_tile):
-        raise _UnexpectedProjectStateError(f"Malformed media grid tile: {raw_tile!r}")
+        raise UnexpectedPageStateError(f"Malformed media grid tile: {raw_tile!r}")
     return _Tile(
         item=MediaItem(
             title=raw_tile["title"],
@@ -1399,31 +1324,3 @@ def _match_by_kind(
         for kind, tokens in tokens_by_kind.items()
         if len(tokens) == 1 and len(ids_by_kind.get(kind, ())) == 1
     }
-
-
-async def _close_page_and_report_failure(page: FlowPage) -> Exception | None:
-    """Release a page and return, rather than hide, any cleanup failure."""
-    if page.is_closed():
-        return None
-
-    try:
-        async with asyncio.timeout(CONFIGS.CLEANUP_TIMEOUT_SECONDS):
-            await page.close()
-    except Exception as error:  # noqa: BLE001 - returned to the caller
-        return error
-
-    if not page.is_closed():
-        return _UnexpectedProjectStateError(
-            "Playwright returned from page.close(), but the page remained open."
-        )
-    return None
-
-
-def _note_cleanup_failure(
-    operation_error: BaseException, cleanup_error: Exception | None
-) -> None:
-    """Attach a secondary cleanup failure without replacing the primary error."""
-    if cleanup_error is not None:
-        operation_error.add_note(
-            f"Page cleanup also failed: {type(cleanup_error).__name__}: {cleanup_error}"
-        )

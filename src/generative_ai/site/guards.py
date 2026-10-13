@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, TypeIs
 if TYPE_CHECKING:
     from web_page.types import RawYaml
 
-    from generative_ai.googleflow.types import RawJson
+    from generative_ai.site.types import RawJson
 
 
 def is_str_keyed_mapping(value: RawYaml | RawJson) -> TypeIs[Mapping[str, object]]:

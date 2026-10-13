@@ -1,4 +1,4 @@
-"""The browser interface Google Flow automation drives.
+"""The browser interface site automation drives.
 
 These are structural types extending ``web_page``'s, so Playwright's
 ``BrowserContext`` and ``Page`` fit as do drop-in replacements for them. Only
@@ -14,7 +14,7 @@ from typing import Protocol, Self, TypedDict, override
 from web_page import Locator, Page
 from web_page.types import Milliseconds
 
-from generative_ai.googleflow.types import Pixels, RawJson
+from generative_ai.site.types import Pixels, RawJson
 
 
 class ViewportSize(TypedDict):
@@ -22,7 +22,7 @@ class ViewportSize(TypedDict):
     height: Pixels
 
 
-class FlowLocator(Locator, Protocol):
+class BrowserLocator(Locator, Protocol):
     @property
     def last(self) -> Self: ...
 
@@ -35,12 +35,12 @@ class FlowLocator(Locator, Protocol):
     async def is_disabled(self) -> bool: ...
 
 
-class FlowPage(Page, Protocol):
+class BrowserPage(Page, Protocol):
     @property
     def viewport_size(self) -> ViewportSize | None: ...
 
     @override
-    def locator(self, selector: str) -> FlowLocator: ...
+    def locator(self, selector: str) -> BrowserLocator: ...
     def is_closed(self) -> bool: ...
     async def close(self) -> object: ...
     async def evaluate(self, expression: str, arg: object = ...) -> RawJson: ...
@@ -50,4 +50,4 @@ class FlowPage(Page, Protocol):
 
 
 class BrowserContext(Protocol):
-    async def new_page(self) -> FlowPage: ...
+    async def new_page(self) -> BrowserPage: ...

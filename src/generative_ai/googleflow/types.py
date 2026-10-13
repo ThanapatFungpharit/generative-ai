@@ -4,16 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-# Raw input: untrusted data, not yet validated.
-type RawJson = object
-"""A value returned from page JavaScript, before it is checked."""
-
-# Units
-type Seconds = float
-type Pixels = int
-
 # Flow identifiers
-type Url = str
 type ProjectMagic = str
 """The stable project identifier in a Flow URL: ``.../project/{magic}``."""
 type MediaId = str

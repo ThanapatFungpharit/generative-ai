@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from generative_ai.site.exceptions import SiteError
+
 if TYPE_CHECKING:
     from pathlib import Path
 
     from generative_ai.googleflow.types import MediaAction, MediaId, ProjectMagic
 
 
-class GoogleFlowError(RuntimeError):
+class GoogleFlowError(SiteError):
     """Base class for failures raised by the Google Flow domain API."""
 
 

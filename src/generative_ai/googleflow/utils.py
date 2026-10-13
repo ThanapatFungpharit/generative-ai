@@ -8,7 +8,8 @@ from generative_ai.googleflow.constants import URLS
 from generative_ai.googleflow.exceptions import ProjectCreationError
 
 if TYPE_CHECKING:
-    from generative_ai.googleflow.types import MediaId, ProjectMagic, SceneId, Url
+    from generative_ai.googleflow.types import MediaId, ProjectMagic, SceneId
+    from generative_ai.site.types import Url
 
 
 def project_magic_from_url(url: Url) -> ProjectMagic:
