@@ -39,9 +39,10 @@ class _Configs:
     BIN_LISTING_TIMEOUT_SECONDS: Seconds = 60.0
     IMAGE_GENERATION_TIMEOUT_SECONDS: Seconds = 180.0
     VIDEO_GENERATION_TIMEOUT_SECONDS: Seconds = 900.0
-    # Narrower viewports switch Flow to a mobile layout with different controls.
-    MIN_VIEWPORT_WIDTH: Pixels = 1280
-    MIN_VIEWPORT_HEIGHT: Pixels = 720
+    # Flow's layout shifts with the viewport (narrower ones switch to a mobile
+    # layout with different controls), so every page is pinned to this size.
+    VIEWPORT_WIDTH: Pixels = 1280
+    VIEWPORT_HEIGHT: Pixels = 720
 
 
 URLS: Final = _GoogleFlowUrls()
@@ -52,8 +53,7 @@ SITE: Final = register_site(
         base_url=URLS.base,
         manifests_dir=_MANIFESTS_DIR,
         navigation_timeout_ms=CONFIGS.NAVIGATION_TIMEOUT_MS,
-        min_viewport_width=CONFIGS.MIN_VIEWPORT_WIDTH,
-        min_viewport_height=CONFIGS.MIN_VIEWPORT_HEIGHT,
+        viewport={"width": CONFIGS.VIEWPORT_WIDTH, "height": CONFIGS.VIEWPORT_HEIGHT},
     )
 )
 SELECTORS: Final = SITE.load_selectors()
