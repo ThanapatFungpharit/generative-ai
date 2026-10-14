@@ -1,0 +1,64 @@
+"""Opt-in switches for tests that drive the real Google Flow website."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+DEFAULT_PROFILE = Path(os.environ.get("GOOGLE_FLOW_PROFILE", "google-profile"))
+DEFAULT_CHANNEL = os.environ.get("GOOGLE_FLOW_CHANNEL")
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    group = parser.getgroup("live", "Live Google Flow tests")
+    group.addoption(
+        "--live",
+        action="store_true",
+        help="Run tests marked 'live' against https://flow.google.com/.",
+    )
+    group.addoption(
+        "--live-credits",
+        action="store_true",
+        help="Also run tests marked 'credits', which spend generation credits "
+        "(implies --live).",
+    )
+    group.addoption(
+        "--flow-profile",
+        type=Path,
+        default=DEFAULT_PROFILE,
+        help="Chromium profile directory signed in to Google "
+        "(default: $GOOGLE_FLOW_PROFILE or ./google-profile).",
+    )
+    group.addoption(
+        "--flow-channel",
+        default=DEFAULT_CHANNEL,
+        help="Browser channel, e.g. 'chrome' for a profile made by Google "
+        "Chrome, whose cookies bundled Chromium cannot decrypt "
+        "(default: $GOOGLE_FLOW_CHANNEL or bundled Chromium).",
+    )
+    group.addoption(
+        "--headless",
+        action="store_true",
+        help="Run Chromium headless. Google may challenge headless sign-ins, "
+        "so a headed browser is the default.",
+    )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: Iterable[pytest.Item]
+) -> None:
+    credits = config.getoption("live_credits")
+    live = credits or config.getoption("live")
+    skip_live = pytest.mark.skip(reason="live test: pass --live to run")
+    skip_credits = pytest.mark.skip(reason="spends credits: pass --live-credits")
+    for item in items:
+        if "credits" in item.keywords and not credits:
+            item.add_marker(skip_credits)
+        elif "live" in item.keywords and not live:
+            item.add_marker(skip_live)

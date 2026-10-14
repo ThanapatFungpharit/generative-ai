@@ -19,6 +19,8 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
     "ruff>=0.17.0",
     "ty>=0.0.86",
     "uv-script>=0.1.9",
@@ -29,3 +31,17 @@ format = "ruff format"
 lint = "ruff check --fix"
 typecheck = "ty check --fix --error all"
 check = ["format", "lint", "typecheck"]
+test = "pytest"
+test-live = "pytest --live"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+asyncio_mode = "auto"
+# One browser context is shared by every live test, so they share one loop.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+markers = [
+    "live: drives the real Google Flow website (needs --live and a signed-in profile)",
+    "credits: spends Google Flow generation credits (needs --live-credits)",
+]

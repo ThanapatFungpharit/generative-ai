@@ -92,6 +92,22 @@ await assemble_video(
 )
 ```
 
+## Live tests
+
+`tests/live/` drives the real Flow site and is skipped unless `--live` is
+passed. Each test creates throwaway projects and deletes them afterwards. Tests
+that spend generation credits also need `--live-credits`.
+
+```bash
+uv run python -m tests.live.sign_in   # once: sign in to Google in ./google-profile
+uv run pytest --live
+```
+
+`--flow-profile` (or `GOOGLE_FLOW_PROFILE`) picks another profile. A profile
+made by installed Google Chrome needs `--flow-channel chrome` (or
+`GOOGLE_FLOW_CHANNEL=chrome`), because bundled Chromium cannot decrypt Chrome's
+cookies and Flow then sees no sign-in.
+
 ## Adding a site
 
 Site-independent code lives in `generative_ai.site`; `googleflow` is the
