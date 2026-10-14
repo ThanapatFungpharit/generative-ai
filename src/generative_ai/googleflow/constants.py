@@ -27,11 +27,21 @@ class _Configs:
     MENU_CLOSE_MAX_ATTEMPTS: int = 3
     MENU_CLOSE_RETRY_TIMEOUT_MS: Milliseconds = 300.0
     UPLOAD_TIMEOUT_SECONDS: Seconds = 30.0
+    # Added per MiB uploaded, so large videos get time to reach Flow.
+    UPLOAD_SECONDS_PER_MIB: Seconds = 1.0
     NAVIGATION_TIMEOUT_MS: Milliseconds = 30_000.0
-    RECOVERY_TIMEOUT_SECONDS: Seconds = 5.0
+    # A reload of the workspace plus its prompt editor; a recovery that times
+    # out closes the page, so this must cover a slow but healthy load.
+    RECOVERY_TIMEOUT_SECONDS: Seconds = 45.0
     POLL_INTERVAL_SECONDS: Seconds = 1.0
+    # Consecutive grid snapshots a polling wait may lose to a page error
+    # (e.g. Flow re-rendering) before it gives up.
+    POLL_SNAPSHOT_ATTEMPTS: int = 5
     GENERATION_START_TIMEOUT_SECONDS: Seconds = 30.0
     GENERATION_FAILURE_GRACE_SECONDS: Seconds = 5.0
+    # Rounds of choosing the settings and reading them back; a later choice
+    # (e.g. the model) can reset an earlier one, which a second round fixes.
+    SETTINGS_APPLY_ATTEMPTS: int = 2
     # How long finished uploads may stay unnamed before they are matched by
     # elimination instead of by title.
     UPLOAD_SETTLE_SECONDS: Seconds = 3.0

@@ -125,7 +125,7 @@ class GoogleFlowProject(SitePage):
     media-scoped locators, file choosers, branching, and polling).
     """
 
-    __slots__ = ("_jobs", "_project_magic", "_project_url")
+    __slots__ = ("_flow_messages", "_jobs", "_project_magic", "_project_url")
 
     def __init__(
         self, project_magic: str, page: BrowserPage, web_page: WebPage
@@ -134,6 +134,9 @@ class GoogleFlowProject(SitePage):
         self._project_magic = normalize_project_magic(project_magic)
         self._project_url = f"{URLS.project}{self._project_magic}"
         self._jobs: dict[GenerationJob, _JobState] = {}
+        # Snackbars seen while polling. They vanish after a few seconds, long
+        # before a wait times out; failures report them, then clear them.
+        self._flow_messages: dict[str, None] = {}
 
     @property
     def project_magic(self) -> ProjectMagic:
@@ -352,14 +355,21 @@ class GoogleFlowProject(SitePage):
             kind_by_token[token] = payload["mimeType"].partition("/")[0]
             payloads.append(payload)
 
+        total_mib = (
+            sum(len(payload["buffer"]) for _, _, payload in built_payloads) / 2**20
+        )
+        timeout = (
+            CONFIGS.UPLOAD_TIMEOUT_SECONDS + total_mib * CONFIGS.UPLOAD_SECONDS_PER_MIB
+        )
         operation_error: BaseException | None = None
+        self._flow_messages.clear()
         try:
             await self._ensure_on_workspace()
             await self._web_page.run("wait_for_workspace")
             known_ids = await self._known_media_ids()
             await self._web_page.run("upload_media", {"files": payloads})
             media_id_by_token = await self._wait_for_uploaded_media(
-                kind_by_token, known_ids
+                kind_by_token, known_ids, timeout
             )
         except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = MediaUploadError("Google Flow could not upload the media.")
@@ -424,10 +434,13 @@ class GoogleFlowProject(SitePage):
         """Apply ``settings`` to the prompt box; ``None`` fields are left as is.
 
         Flow remembers these settings for later generations in the project.
+        They are read back afterwards, and applied once more if Flow reset
+        any (e.g. a model without the chosen aspect ratio).
 
         Raises:
             GenerationSettingsError: Flow does not offer a requested value for
-                the current mode or account, or the popover cannot be driven.
+                the current mode or account, the popover cannot be driven, or
+                Flow still shows other values after the settings are re-applied.
         """
         try:
             await self._ensure_on_workspace()
@@ -934,6 +947,7 @@ class GoogleFlowProject(SitePage):
         self,
         uploads: Mapping[UploadToken, MediaKind],
         known_ids: AbstractSet[MediaId],
+        timeout: Seconds,
     ) -> Mapping[UploadToken, MediaId]:
         """Wait for a finished tile per upload; map each upload token to its ID.
 
@@ -946,10 +960,10 @@ class GoogleFlowProject(SitePage):
         missing = dict(uploads)
         found: dict[UploadToken, MediaId] = {}
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + CONFIGS.UPLOAD_TIMEOUT_SECONDS
+        deadline = loop.time() + timeout
         settled_at: float | None = None
         while True:
-            tiles = await self._snapshot_media()
+            tiles = await self._poll_media()
             claimed = set(found.values())
             for tile in tiles:
                 media_id = tile.finished_id
@@ -1074,6 +1088,7 @@ class GoogleFlowProject(SitePage):
         if not prompt:
             raise ValueError("prompt must not be empty or whitespace")
 
+        self._flow_messages.clear()
         try:
             await self._ensure_on_workspace()
             await self._set_agent_mode(False)
@@ -1123,6 +1138,16 @@ class GoogleFlowProject(SitePage):
         )
 
     async def _read_settings(self) -> GenerationSettings:
+        settings, _ = await self._read_settings_and_summary()
+        return settings
+
+    async def _read_settings_and_summary(
+        self,
+    ) -> tuple[GenerationSettings, tuple[SettingLabel, ...]]:
+        """The checked settings, plus the trigger summary's labels.
+
+        The summary also names fixed values whose group the panel hides.
+        """
         await self._web_page.run("open_generation_settings")
         results = await self._web_page.run("read_generation_settings")
         # Some labels carry a badge glyph, e.g. "🍌 Nano Banana Pro".
@@ -1136,7 +1161,7 @@ class GoogleFlowProject(SitePage):
         duration_match = None if duration is None else re.fullmatch(r"(\d+)s", duration)
         outputs = _checked_label(results, "outputs")
         outputs_match = None if outputs is None else re.fullmatch(r"x([1-4])", outputs)
-        return GenerationSettings(
+        settings = GenerationSettings(
             mode=GenerationMode(mode) if mode in tuple(GenerationMode) else None,
             video_input=(
                 VideoInput(video_input) if video_input in tuple(VideoInput) else None
@@ -1152,11 +1177,36 @@ class GoogleFlowProject(SitePage):
             duration=int(duration_match[1]) if duration_match else None,
             outputs=int(outputs_match[1]) if outputs_match else None,
         )
+        return settings, summary_labels
 
     async def _apply_settings(self, settings: GenerationSettings) -> None:
+        """Apply ``settings``, then read them back until Flow shows them all.
+
+        A later choice can reset an earlier one (a model may not offer the
+        chosen aspect ratio or resolution), so a mismatch is applied again
+        before it is reported.
+
+        Raises:
+            GenerationSettingsError: Flow does not offer a value, or still
+                shows other values after the last attempt.
+        """
         if settings == GenerationSettings():
             return
 
+        for attempt in range(1, CONFIGS.SETTINGS_APPLY_ATTEMPTS + 1):
+            await self._select_settings(settings)
+            actual, summary_labels = await self._read_settings_and_summary()
+            mismatches = _settings_mismatches(settings, actual, summary_labels)
+            if not mismatches:
+                return
+            if attempt == CONFIGS.SETTINGS_APPLY_ATTEMPTS:
+                raise GenerationSettingsError(
+                    "Google Flow did not keep the requested settings: "
+                    f"{'; '.join(mismatches)}."
+                )
+
+    async def _select_settings(self, settings: GenerationSettings) -> None:
+        """Choose every non-``None`` field of ``settings`` in the popover."""
         await self._web_page.run("open_generation_settings")
         # Mode first: it decides which of the other options are rendered.
         if settings.mode is not None:
@@ -1274,7 +1324,7 @@ class GoogleFlowProject(SitePage):
         started_at = loop.time()
         while True:
             await asyncio.sleep(CONFIGS.POLL_INTERVAL_SECONDS)
-            tiles = await self._snapshot_media()
+            tiles = await self._poll_media()
             # A submission adds a tile; finishing one only changes its state.
             if len(tiles) > len(before) or (
                 sum(tile.item.pending for tile in tiles) > pending_before
@@ -1325,7 +1375,7 @@ class GoogleFlowProject(SitePage):
         loop = asyncio.get_running_loop()
         settled_at: float | None = None
         while True:
-            tiles = await self._snapshot_media()
+            tiles = await self._poll_media()
             finished = _finished_tiles(tiles, kind)
             new = finished[: max(0, len(finished) - baseline)]
             now = loop.time()
@@ -1418,14 +1468,42 @@ class GoogleFlowProject(SitePage):
             await self._close_overlays_noting_failure(failure)
             raise failure from error
 
-    async def _note_flow_message(self, error: BaseException) -> None:
-        """Attach the text of any visible Flow snackbar to ``error``."""
+    async def _poll_media(self) -> tuple[_Tile, ...]:
+        """Snapshot the grid for a polling wait, riding out brief page errors.
+
+        A wait can last many minutes, so one failed ``evaluate`` (e.g. while
+        Flow re-renders) should not abort it. It also records visible Flow
+        snackbars for :meth:`_note_flow_message`.
+        """
+        attempt = 1
+        while True:
+            try:
+                tiles = await self._snapshot_media()
+                break
+            except PlaywrightError:
+                # A closed page will not recover; this raises ProjectClosedError.
+                self._require_page()
+                if attempt >= CONFIGS.POLL_SNAPSHOT_ATTEMPTS:
+                    raise
+                attempt += 1
+                await asyncio.sleep(CONFIGS.POLL_INTERVAL_SECONDS)
+        self._flow_messages.update(dict.fromkeys(await self._read_flow_messages()))
+        return tiles
+
+    async def _read_flow_messages(self) -> tuple[str, ...]:
+        """The text of every visible Flow snackbar, or none if unreadable."""
         try:
             results = await self._web_page.run("read_flow_messages")
-        except PlaywrightError:
-            return
-        for message in texts_result(results, "messages"):
+            return texts_result(results, "messages")
+        except PlaywrightError, UnexpectedPageStateError:
+            return ()
+
+    async def _note_flow_message(self, error: BaseException) -> None:
+        """Attach Flow's snackbars, seen while polling or visible now, to ``error``."""
+        self._flow_messages.update(dict.fromkeys(await self._read_flow_messages()))
+        for message in self._flow_messages:
             error.add_note(f"Google Flow reported: {message}")
+        self._flow_messages.clear()
 
     async def _close_overlays(self) -> None:
         """Dismiss Flow menus and popovers left open by an operation."""
@@ -1650,6 +1728,50 @@ def _checked_label(results: Mapping[str, object], group: str) -> str | None:
 def _summary_labels(summary: str) -> tuple[SettingLabel, ...]:
     """The labels in the settings trigger's summary, e.g. "Video · 720p · 4s x1"."""
     return tuple(summary.replace("·", " ").split())
+
+
+def _settings_mismatches(
+    requested: GenerationSettings,
+    actual: GenerationSettings,
+    summary_labels: Iterable[SettingLabel],
+) -> list[str]:
+    """Describe each requested setting Flow does not show, e.g. after a reset.
+
+    A group the panel hides reads as ``None``; its value then counts as kept
+    if the trigger summary names it, as Veo's fixed 720p.
+    """
+
+    def label(value: object, template: str) -> str | None:
+        return None if value is None else template.format(value)
+
+    summary = set(summary_labels)
+    fields = (
+        ("mode", requested.mode, actual.mode, "{}"),
+        ("video type", requested.video_input, actual.video_input, "{}"),
+        ("aspect ratio", requested.aspect_ratio, actual.aspect_ratio, "{}"),
+        ("resolution", requested.resolution, actual.resolution, "{}"),
+        ("duration", requested.duration, actual.duration, "{}s"),
+        ("output count", requested.outputs, actual.outputs, "x{}"),
+    )
+    mismatches: list[str] = []
+    for name, wanted, shown, template in fields:
+        wanted_label = label(wanted, template)
+        shown_label = label(shown, template)
+        if wanted_label is None or wanted_label == shown_label:
+            continue
+        if shown_label is None and wanted_label in summary:
+            continue
+        mismatches.append(f"{name} {wanted_label!r} (Flow shows {shown_label!r})")
+
+    # Like the model menu's own matching: the button may add a family name
+    # or badge around the requested label.
+    if requested.model is not None and (
+        actual.model is None
+        or " ".join(requested.model.split()).casefold()
+        not in " ".join(actual.model.split()).casefold()
+    ):
+        mismatches.append(f"model {requested.model!r} (Flow shows {actual.model!r})")
+    return mismatches
 
 
 def _default_timeout(kind: OutputKind) -> Seconds:
