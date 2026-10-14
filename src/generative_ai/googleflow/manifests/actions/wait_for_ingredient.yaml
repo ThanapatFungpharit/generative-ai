@@ -1,5 +1,5 @@
 name: wait_for_ingredient
 selectors_name: googleflow
-params: index
+params: media_id
 steps:
-  - wait_for: ready_ingredient_chip
+  - wait_for: ready_ingredient

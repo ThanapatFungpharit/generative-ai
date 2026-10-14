@@ -1,0 +1,9 @@
+name: open_media_tile
+selectors_name: googleflow
+params: [index, project_url]
+steps:
+  - click: media_tile_at
+  - wait_for_url: "{project_url}/edit/*"
+  - get_url: url
+  - wait_for: editor_prompt
+  - get_text: {target: editor_prompt, exclude: icons, as: prompt}

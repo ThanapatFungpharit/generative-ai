@@ -1,0 +1,5 @@
+name: wait_for_frame
+selectors_name: googleflow
+params: [media_id, position]
+steps:
+  - wait_for: ready_frame

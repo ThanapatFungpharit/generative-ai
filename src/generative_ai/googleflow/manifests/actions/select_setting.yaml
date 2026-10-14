@@ -1,6 +1,6 @@
 name: select_setting
 selectors_name: googleflow
-params: label
+params: [group, label]
 steps:
   - if:
       visible: {target: setting_option, timeout: 3000}
@@ -12,4 +12,7 @@ steps:
         - wait_for: checked_setting_option
       else:
         - get_all_texts: {target: setting_options, exclude: icons, as: available}
-        - fail: "Google Flow does not offer setting '{label}'."
+        # A group the panel hides may still have a fixed value the trigger
+        # shows, such as Veo's 720p, which the caller then accepts.
+        - get_text: {target: settings_summary, exclude: icons, as: summary}
+        - fail: "Google Flow does not offer {group} '{label}'."

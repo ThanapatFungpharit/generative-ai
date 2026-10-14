@@ -2,5 +2,9 @@ name: open_generation_settings
 selectors_name: googleflow
 steps:
   - wait_for: settings_trigger
-  - click: settings_trigger
+  # The trigger toggles the panel, so a click would close an open one.
+  - if:
+      hidden: settings_panel
+      then:
+        - click: settings_trigger
   - wait_for: settings_panel

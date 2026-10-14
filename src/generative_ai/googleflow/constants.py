@@ -35,6 +35,8 @@ class _Configs:
     # How long finished uploads may stay unnamed before they are matched by
     # elimination instead of by title.
     UPLOAD_SETTLE_SECONDS: Seconds = 3.0
+    # How long a binned item may take to be listed in the bin.
+    BIN_LISTING_TIMEOUT_SECONDS: Seconds = 60.0
     IMAGE_GENERATION_TIMEOUT_SECONDS: Seconds = 180.0
     VIDEO_GENERATION_TIMEOUT_SECONDS: Seconds = 900.0
     # Narrower viewports switch Flow to a mobile layout with different controls.

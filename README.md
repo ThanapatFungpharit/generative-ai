@@ -46,12 +46,26 @@ async def main() -> None:
 | Area | Methods |
 | --- | --- |
 | Projects | `open`, `new`, `rename`, `delete`, `close` |
-| Generation | `generate_image`, `generate_video` (Frames or Ingredients), `configure`, `get_generation_settings`, `set_agent_mode` |
+| Generation | `generate_image`, `generate_video` (Frames or Ingredients), `start_image`, `start_video`, `wait_for_generations`, `configure`, `get_generation_settings`, `set_agent_mode` |
 | Media | `upload_media`, `list_media`, `download_media`, `reuse_prompt`, `toggle_favourite`, `set_project_cover`, `move_to_bin`, `restore_from_bin` |
 | Scenes | `create_scene` |
 
 Media are addressed by Flow's media ID (the tile's `data-media-id`), which
-`upload_media`, `generate_*` and `list_media` return. Model, aspect-ratio and
+`upload_media`, `generate_*` and `list_media` return. Video tiles expose no
+ID once rendered, so `download_media` falls back to the media's editor page,
+which also accepts the IDs a video's thumbnail and editor URL carry.
+
+Generations can run concurrently in one project: `start_image` and
+`start_video` return a `GenerationJob` as soon as Flow accepts it, and
+`wait_for_generations` maps jobs to media IDs, matching each new tile to its
+job by the prompt Flow shows for it:
+
+```python
+jobs = [await project.start_video(prompt, start_frame=frame) for prompt, frame in shots]
+videos = await project.wait_for_generations(jobs)
+```
+
+Model, aspect-ratio and
 download-quality values are Flow's own labels; the options depend on the mode
 and the account, and an unavailable value raises an error listing what Flow
 offers.
@@ -59,6 +73,23 @@ offers.
 Selectors and linear UI flows live in `src/generative_ai/googleflow/manifests/`.
 Pages are kept at least 1280×720 because narrower viewports switch Flow to a
 mobile layout with different controls.
+
+## Joining clips into one video
+
+Flow returns each generation as a separate clip. `assemble_video` (needs
+`ffmpeg` and `ffprobe` on `PATH`) joins clips into one file where each lasts
+exactly `clip_duration` — longer clips are trimmed, shorter ones hold their
+last frame — with dip-to-black transitions and optional burned-in captions:
+
+```python
+from generative_ai import Caption, Clip, assemble_video
+
+await assemble_video(
+    [Clip(Path("scene_1.mp4"), Caption("1 · The basics", "One fact line")), ...],
+    Path("final.mp4"),
+    clip_duration=8.0,
+)
+```
 
 ## Adding a site
 

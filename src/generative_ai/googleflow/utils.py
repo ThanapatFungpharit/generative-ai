@@ -61,6 +61,16 @@ def scene_id_from_url(url: Url, project_magic: ProjectMagic) -> SceneId | None:
     return scene_id if _is_identifier(scene_id) else None
 
 
+def edit_id_from_url(url: Url, project_magic: ProjectMagic) -> MediaId | None:
+    """Return the media ID if ``url`` is the media editor of the given project."""
+    edit_path = f"{urlparse(URLS.project).path}{project_magic}/edit/"
+    current_path = urlparse(url).path.rstrip("/")
+    if not current_path.startswith(edit_path):
+        return None
+    media_id = current_path.removeprefix(edit_path)
+    return media_id if _is_identifier(media_id) else None
+
+
 def normalize_project_magic(project_magic: str) -> ProjectMagic:
     normalized = project_magic.strip().strip("/")
     if not _is_identifier(normalized):
