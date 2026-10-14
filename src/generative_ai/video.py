@@ -108,7 +108,49 @@ async def assemble_video(
     )
     font = font_file or next((path for path in _DEFAULT_FONTS if path.is_file()), None)
     output.parent.mkdir(parents=True, exist_ok=True)
+    # Encoded beside ``output`` and moved there once verified, so a failed or
+    # interrupted run never leaves a truncated file under the final name.
+    # The suffix stays last: ffmpeg picks the container from it.
+    partial = output.with_name(f"{output.stem}.partial{output.suffix}")
+    try:
+        await _encode(
+            clips,
+            partial,
+            has_audio=has_audio,
+            clip_duration=clip_duration,
+            fade=fade,
+            width=width,
+            height=height,
+            fps=fps,
+            font=font,
+            ffmpeg=ffmpeg,
+        )
+        expected = len(clips) * clip_duration
+        actual = await probe_duration(partial, ffprobe=ffprobe)
+        if abs(actual - expected) > _DURATION_TOLERANCE_SECONDS + 1 / fps:
+            raise VideoAssemblyError(
+                f"{output} would be {actual:.2f}s long; expected {expected:.2f}s."
+            )
+        partial.replace(output)
+    finally:
+        partial.unlink(missing_ok=True)
+    return output
 
+
+async def _encode(
+    clips: Sequence[Clip],
+    output: Path,
+    *,
+    has_audio: Sequence[bool],
+    clip_duration: Seconds,
+    fade: Seconds,
+    width: Pixels,
+    height: Pixels,
+    fps: int,
+    font: Path | None,
+    ffmpeg: str,
+) -> None:
+    """Run the ffmpeg filtergraph that joins ``clips`` into ``output``."""
     with tempfile.TemporaryDirectory(prefix="generative-ai-") as text_dir:
         filters: list[str] = []
         for index, (clip, audio) in enumerate(zip(clips, has_audio, strict=True)):
@@ -159,14 +201,6 @@ async def assemble_video(
             str(output),
         )  # fmt: skip
 
-    expected = len(clips) * clip_duration
-    actual = await probe_duration(output, ffprobe=ffprobe)
-    if abs(actual - expected) > _DURATION_TOLERANCE_SECONDS + 1 / fps:
-        raise VideoAssemblyError(
-            f"{output} is {actual:.2f}s long; expected {expected:.2f}s."
-        )
-    return output
-
 
 def _tool(explicit: str | None, name: str) -> str:
     found = explicit or shutil.which(name)
@@ -186,7 +220,14 @@ async def _run(program: str, *args: str) -> str:
         )
     except OSError as error:
         raise VideoAssemblyError(f"{program} could not be started.") from error
-    stdout, stderr = await process.communicate()
+    try:
+        stdout, stderr = await process.communicate()
+    except BaseException:
+        # Cancelled or interrupted: do not leave ffmpeg encoding unattended.
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+        raise
     if process.returncode != 0:
         failure = VideoAssemblyError(
             f"{Path(program).name} exited with status {process.returncode}."
