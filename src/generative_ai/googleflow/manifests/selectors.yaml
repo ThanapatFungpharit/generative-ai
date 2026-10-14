@@ -20,6 +20,7 @@ selectors:
   # It also removes the ingredients and frames, and shows whenever any is set.
   clear_prompt_button: "flow-base-prompt-box button[aria-label='Clear prompt']"
   generate_button: "flow-base-prompt-box button.generate-icon-button"
+  enabled_generate_button: "flow-base-prompt-box button.generate-icon-button:not([disabled])"
   # Its tooltip, linked by aria-describedby, says why the button is disabled.
   generate_button_host: flow-base-prompt-box flow-generate-icon-button
   agent_mode_chip: "flow-base-prompt-box button.agent-mode-chip"

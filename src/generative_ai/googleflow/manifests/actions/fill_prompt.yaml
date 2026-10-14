@@ -4,3 +4,7 @@ params: prompt
 steps:
   - fill: {target: prompt_editor, value: "{prompt}"}
   - get_text: {target: prompt_editor, as: text}
+  # Flow enables Generate once its own state has the prompt, which lags the
+  # editor's text while the tab is in the background. Optional: missing
+  # inputs keep it disabled, and the caller reports why.
+  - wait_for: {target: enabled_generate_button, timeout: 10000, optional: true}
