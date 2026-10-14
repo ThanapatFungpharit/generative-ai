@@ -17,11 +17,18 @@ from .exceptions import (
     ProjectRenameError,
     SceneCreationError,
 )
-from .models import GenerationMode, GenerationSettings, MediaItem, VideoInput
+from .models import (
+    GenerationJob,
+    GenerationMode,
+    GenerationSettings,
+    MediaItem,
+    VideoInput,
+)
 from .project import GoogleFlowProject
 
 __all__ = [
     "GenerationError",
+    "GenerationJob",
     "GenerationMode",
     "GenerationSettings",
     "GenerationSettingsError",

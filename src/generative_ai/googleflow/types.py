@@ -24,9 +24,9 @@ type TileLabel = str
 type QualityLabel = str
 """Leading label of a Download submenu entry, e.g. ``1K``."""
 type MediaMenuItem = Literal[
-    "Reuse prompt", "Favourite", "Set project cover", "Move to bin"
+    "Add to prompt", "Reuse prompt", "Favorite", "Set project cover", "Move to trash"
 ]
-"""An entry of a media tile's context menu, as Flow labels it."""
+"""An entry of a media tile's context menu, as Flow's en-US locale labels it."""
 type MediaAction = str
 """Verb phrase naming a media operation in error messages, e.g. ``favourite``."""
 
@@ -35,11 +35,22 @@ type AspectRatio = str
 """Flow's aspect-ratio label, e.g. ``9:16``."""
 type ModelLabel = str
 """Flow's model label, e.g. ``Veo 3.1 - Fast``."""
+type VideoResolution = str
+"""Flow's video-resolution label, e.g. ``720p``."""
+type VideoDuration = int
+"""A video's length in whole seconds; Flow labels 8 as ``8s``."""
 type OutputCount = int
 """How many outputs one generation produces, from 1 to 4."""
 type SettingLabel = str
 """The visible label of a toggle in the generation settings popover."""
-type SettingField = Literal["mode", "video input", "aspect ratio", "output count"]
-"""A group of toggles in the settings popover, named for error messages."""
+type SettingField = Literal[
+    "Mode",
+    "Video type",
+    "Aspect ratio",
+    "Video resolution",
+    "Video duration",
+    "Output count",
+]
+"""A group of toggles in the settings popover, by its ``aria-label``."""
 type FrameSlot = Literal["Start", "End"]
 type PromptText = str

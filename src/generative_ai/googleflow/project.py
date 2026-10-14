@@ -6,6 +6,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Self, TypedDict, TypeIs, override
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -13,7 +14,7 @@ from uuid import uuid4
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from web_page.exceptions import ActionFailed
-from web_page.utils import is_str_list
+from web_page.utils import ESCAPES, is_str_list
 
 from generative_ai.googleflow.constants import CONFIGS, SELECTORS, SITE, URLS
 from generative_ai.googleflow.exceptions import (
@@ -34,12 +35,14 @@ from generative_ai.googleflow.exceptions import (
     SceneCreationError,
 )
 from generative_ai.googleflow.models import (
+    GenerationJob,
     GenerationMode,
     GenerationSettings,
     MediaItem,
     VideoInput,
 )
 from generative_ai.googleflow.utils import (
+    edit_id_from_url,
     is_not_found_url,
     is_project_url,
     normalize_media_id,
@@ -83,6 +86,8 @@ if TYPE_CHECKING:
         SettingLabel,
         TileLabel,
         UploadToken,
+        VideoDuration,
+        VideoResolution,
     )
     from generative_ai.site import BrowserContext, BrowserPage
     from generative_ai.site.types import RawJson, Seconds, Url
@@ -101,6 +106,16 @@ class _Tile:
         return None if self.item.pending else self.item.media_id
 
 
+@dataclass(slots=True)
+class _JobState:
+    """What a started generation is attributed against."""
+
+    baseline: int
+    """Finished tiles of the job's kind in the grid before it was submitted."""
+    outputs: tuple[MediaId, ...] | None = None
+    """``None`` until the job's tiles have been attributed."""
+
+
 class GoogleFlowProject(SitePage):
     """A domain facade for one Google Flow project browser page.
 
@@ -110,7 +125,7 @@ class GoogleFlowProject(SitePage):
     media-scoped locators, file choosers, branching, and polling).
     """
 
-    __slots__ = ("_project_magic", "_project_url")
+    __slots__ = ("_jobs", "_project_magic", "_project_url")
 
     def __init__(
         self, project_magic: str, page: BrowserPage, web_page: WebPage
@@ -118,6 +133,7 @@ class GoogleFlowProject(SitePage):
         super().__init__(page, web_page)
         self._project_magic = normalize_project_magic(project_magic)
         self._project_url = f"{URLS.project}{self._project_magic}"
+        self._jobs: dict[GenerationJob, _JobState] = {}
 
     @property
     def project_magic(self) -> ProjectMagic:
@@ -186,12 +202,14 @@ class GoogleFlowProject(SitePage):
                 "Timed out while waiting for Google Flow to create a project."
             )
             if page is not None:
+                _note_created_project(failure, page.url)
                 cleanup_error = await close_page_and_report_failure(page)
                 note_cleanup_failure(failure, cleanup_error)
             raise failure from error
         except PlaywrightError as error:
             failure = ProjectCreationError("Google Flow could not create a project.")
             if page is not None:
+                _note_created_project(failure, page.url)
                 cleanup_error = await close_page_and_report_failure(page)
                 note_cleanup_failure(failure, cleanup_error)
             raise failure from error
@@ -459,26 +477,19 @@ class GoogleFlowProject(SitePage):
 
         Raises:
             ValueError: ``prompt`` is empty or a media ID is malformed.
-            GenerationSettingsError: A setting or reference cannot be applied.
-            MediaNotFoundError: A reference is not in the project's asset picker.
+            GenerationSettingsError: A setting cannot be applied.
+            MediaNotFoundError: A reference is not in the project's media grid.
             GenerationError: Flow does not start or finish the generation in
                 time, or finishes without producing media.
         """
-        settings = GenerationSettings(
-            mode=GenerationMode.IMAGE,
-            aspect_ratio=aspect_ratio,
-            model=model,
-            outputs=outputs,
-        )
-        return await self._generate(
+        job = await self._start_image(
             prompt,
-            settings,
-            expected_kind="image",
-            ingredients=_normalize_media_ids(references),
-            timeout=(
-                CONFIGS.IMAGE_GENERATION_TIMEOUT_SECONDS if timeout is None else timeout
-            ),
+            model=model,
+            aspect_ratio=aspect_ratio,
+            outputs=outputs,
+            references=references,
         )
+        return await self._finish(job, timeout)
 
     @page_required
     async def generate_video(
@@ -488,6 +499,8 @@ class GoogleFlowProject(SitePage):
         model: ModelLabel | None = None,
         aspect_ratio: AspectRatio | None = None,
         outputs: OutputCount | None = None,
+        resolution: VideoResolution | None = None,
+        duration: VideoDuration | None = None,
         start_frame: MediaId | None = None,
         end_frame: MediaId | None = None,
         ingredients: Iterable[MediaId] = (),
@@ -497,50 +510,135 @@ class GoogleFlowProject(SitePage):
 
         Passing ``start_frame`` and/or ``end_frame`` (image media IDs) uses
         Flow's Frames mode; otherwise Ingredients mode is used, with
-        ``ingredients`` as optional reference media IDs. Both frame slots must
-        be empty beforehand. Other arguments behave as in
-        :meth:`generate_image`. Video generation spends account credits.
+        ``ingredients`` as optional reference media IDs. ``resolution`` is
+        Flow's label, e.g. ``"720p"``, and ``duration`` the video length in
+        seconds, e.g. ``8``; ``None`` keeps the current value. Other arguments behave as in :meth:`generate_image`. Video generation spends account credits.
 
         Raises:
-            ValueError: ``prompt`` is empty, a media ID is malformed, or frames
-                are combined with ingredients.
-            GenerationSettingsError: A setting, frame or ingredient cannot be
-                applied.
+            ValueError: ``prompt`` is empty, a media ID is malformed, frames
+                are combined with ingredients, or ``end_frame`` is given
+                without ``start_frame``.
+            GenerationSettingsError: A setting cannot be applied.
             MediaNotFoundError: A frame or ingredient is not in the project's
-                asset picker.
+                media grid.
             GenerationError: Flow does not start or finish the generation in
                 time, or finishes without producing media.
         """
-        ingredient_ids = _normalize_media_ids(ingredients)
-        frame_inputs: tuple[tuple[FrameSlot, MediaId | None], ...] = (
-            ("Start", start_frame),
-            ("End", end_frame),
-        )
-        frames: dict[FrameSlot, MediaId] = {
-            slot: normalize_media_id(media_id)
-            for slot, media_id in frame_inputs
-            if media_id is not None
-        }
-        if frames and ingredient_ids:
-            raise ValueError("frames and ingredients cannot be combined")
-
-        settings = GenerationSettings(
-            mode=GenerationMode.VIDEO,
-            video_input=VideoInput.FRAMES if frames else VideoInput.INGREDIENTS,
-            aspect_ratio=aspect_ratio,
-            model=model,
-            outputs=outputs,
-        )
-        return await self._generate(
+        job = await self._start_video(
             prompt,
-            settings,
-            expected_kind="video",
-            ingredients=ingredient_ids,
-            frames=frames,
-            timeout=(
-                CONFIGS.VIDEO_GENERATION_TIMEOUT_SECONDS if timeout is None else timeout
-            ),
+            model=model,
+            aspect_ratio=aspect_ratio,
+            outputs=outputs,
+            resolution=resolution,
+            duration=duration,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            ingredients=ingredients,
         )
+        return await self._finish(job, timeout)
+
+    @page_required
+    async def start_image(
+        self,
+        prompt: PromptText,
+        *,
+        model: ModelLabel | None = None,
+        aspect_ratio: AspectRatio | None = None,
+        outputs: OutputCount | None = None,
+        references: Iterable[MediaId] = (),
+    ) -> GenerationJob:
+        """Submit an image generation and return as soon as Flow starts it.
+
+        Arguments are as in :meth:`generate_image`. Several jobs can run at
+        once in one project; collect them with :meth:`wait_for_generations`.
+
+        Raises:
+            ValueError: ``prompt`` is empty or a media ID is malformed.
+            GenerationSettingsError: A setting cannot be applied.
+            MediaNotFoundError: A reference is not in the project's media grid.
+            GenerationError: Flow does not start the generation.
+        """
+        return await self._start_image(
+            prompt,
+            model=model,
+            aspect_ratio=aspect_ratio,
+            outputs=outputs,
+            references=references,
+        )
+
+    @page_required
+    async def start_video(
+        self,
+        prompt: PromptText,
+        *,
+        model: ModelLabel | None = None,
+        aspect_ratio: AspectRatio | None = None,
+        outputs: OutputCount | None = None,
+        resolution: VideoResolution | None = None,
+        duration: VideoDuration | None = None,
+        start_frame: MediaId | None = None,
+        end_frame: MediaId | None = None,
+        ingredients: Iterable[MediaId] = (),
+    ) -> GenerationJob:
+        """Submit a video generation and return as soon as Flow starts it.
+
+        Arguments are as in :meth:`generate_video`; Flow empties the frame
+        slots on submission, so the next job can use them. Collect jobs with
+        :meth:`wait_for_generations`. Video generation spends account credits.
+
+        Raises:
+            ValueError: ``prompt`` is empty, a media ID is malformed, frames
+                are combined with ingredients, or ``end_frame`` is given
+                without ``start_frame``.
+            GenerationSettingsError: A setting cannot be applied.
+            MediaNotFoundError: A frame or ingredient is not in the project's
+                media grid.
+            GenerationError: Flow does not start the generation.
+        """
+        return await self._start_video(
+            prompt,
+            model=model,
+            aspect_ratio=aspect_ratio,
+            outputs=outputs,
+            resolution=resolution,
+            duration=duration,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            ingredients=ingredients,
+        )
+
+    @page_required
+    async def wait_for_generations(
+        self, jobs: Iterable[GenerationJob], *, timeout: Seconds | None = None
+    ) -> Mapping[GenerationJob, tuple[MediaId, ...]]:
+        """Wait for started jobs and map each to its media IDs, newest first.
+
+        Flow does not say which pending tile belongs to which job, so this
+        waits for every started job of the same kinds, then attributes each
+        new tile by the prompt Flow shows for it. Jobs not in ``jobs`` stay
+        collected for a later call. A job whose output Flow dropped (e.g. by
+        safety filtering) maps to an empty tuple. ``timeout`` defaults to the
+        generation timeout of the slowest kind among ``jobs``.
+
+        Raises:
+            ValueError: A job was not started by this project or was already
+                returned by an earlier call.
+            GenerationError: Flow does not finish in time, or the new tiles
+                cannot be read.
+        """
+        jobs = tuple(jobs)
+        if timeout is None:
+            timeout = max(
+                (_default_timeout(job.kind) for job in jobs),
+                default=CONFIGS.IMAGE_GENERATION_TIMEOUT_SECONDS,
+            )
+        try:
+            return await self._wait_for_jobs(jobs, timeout)
+        except (PlaywrightError, UnexpectedPageStateError) as error:
+            failure = GenerationError("Google Flow generations could not be collected.")
+            await self._note_flow_message(failure)
+            await self._restore_project_page_after_failure(failure)
+            raise failure from error
 
     @page_required
     async def reuse_prompt(self, media_id: MediaId) -> PromptText:
@@ -578,7 +676,7 @@ class GoogleFlowProject(SitePage):
             MediaActionError: Flow does not accept the action.
         """
         await self._run_media_menu_action(
-            normalize_media_id(media_id), "Favourite", "favourite"
+            normalize_media_id(media_id), "Favorite", "favourite"
         )
 
     @page_required
@@ -597,12 +695,15 @@ class GoogleFlowProject(SitePage):
     async def move_to_bin(self, media_id: MediaId) -> None:
         """Move a media item to the project's bin, where it can be restored.
 
+        Flow removes the tile at once but lists the item in the bin only
+        after a delay, typically 10-30 seconds.
+
         Raises:
             MediaNotFoundError: No grid tile has ``media_id``.
             MediaActionError: Flow does not remove the tile from the grid.
         """
         media_id = normalize_media_id(media_id)
-        await self._run_media_menu_action(media_id, "Move to bin", "move to bin")
+        await self._run_media_menu_action(media_id, "Move to trash", "move to bin")
         try:
             await self._web_page.run("wait_for_media_removed", {"media_id": media_id})
         except PlaywrightError as error:
@@ -612,16 +713,31 @@ class GoogleFlowProject(SitePage):
     async def restore_from_bin(self, media_id: MediaId) -> None:
         """Restore a binned media item and return to the project workspace.
 
+        An item binned moments ago is not listed in the bin yet, so the bin
+        is reloaded until it is, for up to a minute.
+        The restored item likewise reappears in the grid after a delay.
+
         Raises:
             MediaNotFoundError: The bin has no tile with ``media_id``.
             MediaActionError: Flow does not restore the item.
         """
         media_id = normalize_media_id(media_id)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + CONFIGS.BIN_LISTING_TIMEOUT_SECONDS
         try:
-            await self._web_page.run(
-                "restore_from_bin",
-                {"trash_url": f"{self.project_url}/trash", "media_id": media_id},
-            )
+            while True:
+                try:
+                    await self._web_page.run(
+                        "restore_from_bin",
+                        {
+                            "trash_url": f"{self.project_url}/trash",
+                            "media_id": media_id,
+                        },
+                    )
+                    break
+                except ActionFailed:
+                    if loop.time() >= deadline:
+                        raise
             await self._return_to_workspace()
         except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = MediaActionError(media_id, "restore")
@@ -642,26 +758,42 @@ class GoogleFlowProject(SitePage):
     ) -> Path:
         """Download a media item and return the saved file path.
 
-        ``quality`` is the leading label of a Download submenu entry, such as
-        ``"1K"`` or ``"2K"`` for images; ``None`` picks the first enabled one.
-        If ``destination`` is an existing directory, Flow's suggested file
-        name is used inside it.
+        ``quality`` is the leading label of a Download menu entry, such as
+        ``"1K"`` or ``"2K"`` for images or ``"720p"`` for videos; some
+        upscales spend credits, which Flow notes in the label. ``None`` picks
+        the original size, or else the first enabled entry. Uploads have no
+        such menu, so they ignore ``quality``. Video tiles expose no media
+        ID, so a media ID not found in the grid is downloaded from its editor
+        page. If ``destination`` is an existing directory, Flow's suggested
+        file name is used inside it.
 
         Raises:
-            MediaNotFoundError: No grid tile has ``media_id``.
-            MediaActionError: The quality is unavailable or the download fails.
+            MediaNotFoundError: Neither the grid nor the editor has ``media_id``.
+            MediaActionError: The quality is unavailable, Flow fails to
+                upscale to it, or the download fails.
         """
         media_id = normalize_media_id(media_id)
+        params: dict[ParamName, str] = {
+            "media_id": media_id,
+            "quality": quality or "",
+            "to": str(destination),
+        }
         try:
             await self._ensure_on_workspace()
-            results = await self._web_page.run(
-                "download_media",
-                {
-                    "media_id": media_id,
-                    "quality": quality or "",
-                    "to": str(destination),
-                },
-            )
+            try:
+                results = await self._web_page.run("download_media", params)
+            except ActionFailed as error:
+                # Only a missing tile falls back; these mean the tile was found.
+                if error.results.keys() & {"available", "flow_messages"}:
+                    raise
+                results = await self._web_page.run(
+                    "download_from_editor",
+                    {
+                        "edit_url": f"{self.project_url}/edit/{media_id}",
+                        "quality": params["quality"],
+                        "to": params["to"],
+                    },
+                )
             target = Path(text_result(results, "path"))
         except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = MediaActionError(media_id, "download")
@@ -672,6 +804,10 @@ class GoogleFlowProject(SitePage):
                 failure = MediaActionError(media_id, f"download {quality!r} of")
                 available = texts_result(error.results, "available")
                 failure.add_note(f"Available downloads: {', '.join(available)}.")
+            elif "flow_messages" in error.results:
+                failure = MediaActionError(media_id, f"download {quality!r} of")
+                for message in texts_result(error.results, "flow_messages"):
+                    failure.add_note(f"Google Flow reported: {message}")
             else:
                 failure = MediaNotFoundError(media_id)
             await self._close_overlays_noting_failure(failure)
@@ -858,7 +994,74 @@ class GoogleFlowProject(SitePage):
                 raise failure
             await asyncio.sleep(CONFIGS.POLL_INTERVAL_SECONDS)
 
-    async def _generate(
+    async def _start_image(
+        self,
+        prompt: PromptText,
+        *,
+        model: ModelLabel | None,
+        aspect_ratio: AspectRatio | None,
+        outputs: OutputCount | None,
+        references: Iterable[MediaId],
+    ) -> GenerationJob:
+        settings = GenerationSettings(
+            mode=GenerationMode.IMAGE,
+            aspect_ratio=aspect_ratio,
+            model=model,
+            outputs=outputs,
+        )
+        return await self._start_generation(
+            prompt,
+            settings,
+            expected_kind="image",
+            ingredients=_normalize_media_ids(references),
+        )
+
+    async def _start_video(
+        self,
+        prompt: PromptText,
+        *,
+        model: ModelLabel | None,
+        aspect_ratio: AspectRatio | None,
+        outputs: OutputCount | None,
+        resolution: VideoResolution | None,
+        duration: VideoDuration | None,
+        start_frame: MediaId | None,
+        end_frame: MediaId | None,
+        ingredients: Iterable[MediaId],
+    ) -> GenerationJob:
+        ingredient_ids = _normalize_media_ids(ingredients)
+        frame_inputs: tuple[tuple[FrameSlot, MediaId | None], ...] = (
+            ("Start", start_frame),
+            ("End", end_frame),
+        )
+        frames: dict[FrameSlot, MediaId] = {
+            slot: normalize_media_id(media_id)
+            for slot, media_id in frame_inputs
+            if media_id is not None
+        }
+        if frames and ingredient_ids:
+            raise ValueError("frames and ingredients cannot be combined")
+        if "End" in frames and "Start" not in frames:
+            raise ValueError("Google Flow needs a start_frame with an end_frame")
+
+        settings = GenerationSettings(
+            mode=GenerationMode.VIDEO,
+            video_input=VideoInput.FRAMES if frames else VideoInput.INGREDIENTS,
+            aspect_ratio=aspect_ratio,
+            model=model,
+            resolution=resolution,
+            duration=duration,
+            outputs=outputs,
+        )
+        return await self._start_generation(
+            prompt,
+            settings,
+            expected_kind="video",
+            ingredients=ingredient_ids,
+            frames=frames,
+        )
+
+    async def _start_generation(
         self,
         prompt: PromptText,
         settings: GenerationSettings,
@@ -866,8 +1069,7 @@ class GoogleFlowProject(SitePage):
         expected_kind: OutputKind,
         ingredients: Iterable[MediaId] = (),
         frames: Mapping[FrameSlot, MediaId] | None = None,
-        timeout: Seconds,
-    ) -> tuple[MediaId, ...]:
+    ) -> GenerationJob:
         prompt = prompt.strip()
         if not prompt:
             raise ValueError("prompt must not be empty or whitespace")
@@ -876,21 +1078,44 @@ class GoogleFlowProject(SitePage):
             await self._ensure_on_workspace()
             await self._set_agent_mode(False)
             await self._apply_settings(settings)
+            # This also empties the ingredients and frames left from before.
             await self._clear_prompt()
-            for slot, media_id in (frames or {}).items():
-                await self._fill_frame(slot, media_id)
+            await self._fill_frames(frames or {})
             for media_id in ingredients:
                 await self._add_ingredient(media_id)
             await self._fill_prompt(prompt)
-            return await self._submit_generation(timeout, expected_kind=expected_kind)
+            return await self._submit_generation(prompt, expected_kind=expected_kind)
         except (PlaywrightError, UnexpectedPageStateError) as error:
-            failure = GenerationError("Google Flow could not run the generation.")
+            failure = GenerationError("Google Flow could not start the generation.")
             await self._note_flow_message(failure)
             await self._close_overlays_noting_failure(failure)
             raise failure from error
         except GoogleFlowError as error:
             await self._close_overlays_noting_failure(error)
             raise
+
+    async def _finish(
+        self, job: GenerationJob, timeout: Seconds | None
+    ) -> tuple[MediaId, ...]:
+        """Wait for one job; raise if Flow produced nothing for it."""
+        try:
+            outputs = (
+                await self._wait_for_jobs(
+                    (job,), _default_timeout(job.kind) if timeout is None else timeout
+                )
+            )[job]
+        except (PlaywrightError, UnexpectedPageStateError) as error:
+            failure = GenerationError("Google Flow could not run the generation.")
+            await self._note_flow_message(failure)
+            await self._restore_project_page_after_failure(failure)
+            raise failure from error
+        if not outputs:
+            failure = GenerationError(
+                "Google Flow finished the generation without producing media."
+            )
+            await self._note_flow_message(failure)
+            raise failure
+        return outputs
 
     async def _set_agent_mode(self, enabled: bool) -> None:
         await self._web_page.run(
@@ -900,28 +1125,32 @@ class GoogleFlowProject(SitePage):
     async def _read_settings(self) -> GenerationSettings:
         await self._web_page.run("open_generation_settings")
         results = await self._web_page.run("read_generation_settings")
-        model = text_result(results, "model")
+        # Some labels carry a badge glyph, e.g. "🍌 Nano Banana Pro".
+        model = re.sub(r"^\W+", "", text_result(results, "model"))
+        summary_labels = _summary_labels(text_result(results, "summary"))
         await self._close_overlays()
 
-        mode: GenerationMode | None = None
-        video_input: VideoInput | None = None
-        aspect_ratio: AspectRatio | None = None
-        outputs: OutputCount | None = None
-        for label in texts_result(results, "checked"):
-            if label in GenerationMode:
-                mode = GenerationMode(label)
-            elif label in VideoInput:
-                video_input = VideoInput(label)
-            elif match := re.fullmatch(r"x([1-4])", label):
-                outputs = int(match[1])
-            else:
-                aspect_ratio = label
+        mode = _checked_label(results, "mode")
+        video_input = _checked_label(results, "video_input")
+        duration = _checked_label(results, "duration")
+        duration_match = None if duration is None else re.fullmatch(r"(\d+)s", duration)
+        outputs = _checked_label(results, "outputs")
+        outputs_match = None if outputs is None else re.fullmatch(r"x([1-4])", outputs)
         return GenerationSettings(
-            mode=mode,
-            video_input=video_input,
-            aspect_ratio=aspect_ratio,
+            mode=GenerationMode(mode) if mode in tuple(GenerationMode) else None,
+            video_input=(
+                VideoInput(video_input) if video_input in tuple(VideoInput) else None
+            ),
+            aspect_ratio=_checked_label(results, "aspect_ratio"),
             model=model or None,
-            outputs=outputs,
+            # Models with one resolution hide the group; the summary names it.
+            resolution=_checked_label(results, "resolution")
+            or next(
+                (label for label in summary_labels if re.fullmatch(r"\d+p", label)),
+                None,
+            ),
+            duration=int(duration_match[1]) if duration_match else None,
+            outputs=int(outputs_match[1]) if outputs_match else None,
         )
 
     async def _apply_settings(self, settings: GenerationSettings) -> None:
@@ -931,26 +1160,36 @@ class GoogleFlowProject(SitePage):
         await self._web_page.run("open_generation_settings")
         # Mode first: it decides which of the other options are rendered.
         if settings.mode is not None:
-            await self._select_setting("mode", settings.mode)
+            await self._select_setting("Mode", settings.mode)
         if settings.video_input is not None:
-            await self._select_setting("video input", settings.video_input)
+            await self._select_setting("Video type", settings.video_input)
         if settings.aspect_ratio is not None:
-            await self._select_setting("aspect ratio", settings.aspect_ratio)
+            await self._select_setting("Aspect ratio", settings.aspect_ratio)
         if settings.model is not None:
             await self._select_model(settings.model)
+        # After the model: it decides which resolutions and durations exist.
+        if settings.resolution is not None:
+            await self._select_setting("Video resolution", settings.resolution)
+        if settings.duration is not None:
+            await self._select_setting("Video duration", f"{settings.duration}s")
         if settings.outputs is not None:
-            await self._select_setting("output count", f"x{settings.outputs}")
+            await self._select_setting("Output count", f"x{settings.outputs}")
         await self._close_overlays()
 
     async def _select_setting(self, field: SettingField, label: SettingLabel) -> None:
-        """Check the settings toggle ``label``, or report the options Flow offers."""
+        """Check the toggle ``label`` in group ``field``, or report its options."""
         try:
-            await self._web_page.run("select_setting", {"label": label})
+            await self._web_page.run("select_setting", {"group": field, "label": label})
         except ActionFailed as error:
             available = texts_result(error.results, "available")
+            # A hidden group's fixed value, e.g. Veo's 720p, is already set.
+            if not available and label in _summary_labels(
+                text_result(error.results, "summary")
+            ):
+                return
             raise GenerationSettingsError(
-                f"Google Flow does not offer {field} {label!r} here; "
-                f"available options: {', '.join(available)}."
+                f"Google Flow does not offer {field.lower()} {str(label)!r} here; "
+                f"available options: {', '.join(available) or 'none'}."
             ) from error
 
     async def _select_model(self, model: ModelLabel) -> None:
@@ -966,30 +1205,33 @@ class GoogleFlowProject(SitePage):
     async def _clear_prompt(self) -> None:
         await self._web_page.run("clear_prompt")
 
-    async def _fill_frame(self, slot: FrameSlot, media_id: MediaId) -> None:
-        """Fill the empty frame slot labelled ``slot`` (Start or End)."""
-        try:
-            await self._web_page.run("open_frame_slot", {"slot": slot})
-        except ActionFailed as error:
-            raise GenerationSettingsError(error.message) from error
-        await self._pick_asset(media_id)
-        await self._web_page.run("wait_for_frame_filled", {"slot": slot})
+    async def _fill_frames(self, frames: Mapping[FrameSlot, MediaId]) -> None:
+        """Fill the emptied frame slots with ``frames``.
+
+        Flow puts media added from a tile into the first empty slot, so the
+        Start frame, which an End frame requires, goes first.
+        """
+        for position, slot in enumerate(("Start", "End")):
+            if (media_id := frames.get(slot)) is not None:
+                await self._add_to_prompt(media_id)
+                await self._web_page.run(
+                    "wait_for_frame", {"media_id": media_id, "position": str(position)}
+                )
 
     async def _add_ingredient(self, media_id: MediaId) -> None:
-        chips = self._require_page().locator(SELECTORS["ingredient_chip"])
-        existing_chips = await chips.count()
-        try:
-            await self._web_page.run("open_ingredient_picker")
-        except ActionFailed as error:
-            raise GenerationSettingsError(error.message) from error
-        await self._pick_asset(media_id)
-        await self._web_page.run("wait_for_ingredient", {"index": str(existing_chips)})
-        await self._close_overlays()
+        await self._add_to_prompt(media_id)
+        await self._web_page.run("wait_for_ingredient", {"media_id": media_id})
 
-    async def _pick_asset(self, media_id: MediaId) -> None:
-        """Choose ``media_id`` in the open asset picker."""
+    async def _add_to_prompt(self, media_id: MediaId) -> None:
+        """Add media to the prompt box from its grid tile's menu.
+
+        The asset picker's thumbnails carry no media ID; the tile does.
+        """
         try:
-            await self._web_page.run("pick_asset", {"media_id": media_id})
+            await self._web_page.run(
+                "run_media_menu_item",
+                {"media_id": media_id, "item": _menu_item_pattern("Add to prompt")},
+            )
         except ActionFailed as error:
             raise MediaNotFoundError(media_id) from error
 
@@ -999,85 +1241,162 @@ class GoogleFlowProject(SitePage):
             raise GenerationError("Google Flow did not accept the prompt text.")
 
     async def _submit_generation(
-        self, timeout: Seconds, *, expected_kind: OutputKind
-    ) -> tuple[MediaId, ...]:
-        """Start generation and wait for the media tiles it produces.
-
-        Only finished tiles of ``expected_kind`` whose media ID was not in
-        the grid before submitting count as output, so uploads, scenes and
-        tiles still rendering are never reported.
-        """
+        self, prompt: PromptText, *, expected_kind: OutputKind
+    ) -> GenerationJob:
+        """Click Generate and return once Flow shows a new tile for it."""
         page = self._require_page()
         generate_button = page.locator(SELECTORS["generate_button"])
         if await generate_button.is_disabled():
-            raise GenerationError(
+            failure = GenerationError(
                 "Google Flow did not enable generation for this prompt and inputs."
             )
+            # The button's tooltip says why, e.g. a missing start frame.
+            reason = await page.locator(SELECTORS["generate_button_host"]).evaluate(
+                _DESCRIPTION_JS
+            )
+            if isinstance(reason, str) and reason.strip():
+                failure.add_note(f"Google Flow reported: {reason.strip()}")
+            raise failure
 
         trigger_text = await page.locator(SELECTORS["settings_trigger"]).inner_text()
         outputs_match = re.search(r"\bx([1-4])\b", trigger_text)
-        expected_outputs = int(outputs_match[1]) if outputs_match else 1
+        job = GenerationJob(
+            prompt=prompt,
+            kind=expected_kind,
+            outputs=int(outputs_match[1]) if outputs_match else 1,
+        )
 
         before = await self._snapshot_media()
-        known_ids = {
-            tile.item.media_id for tile in before if tile.item.media_id is not None
-        }
         pending_before = sum(tile.item.pending for tile in before)
         await generate_button.click()
 
         loop = asyncio.get_running_loop()
         started_at = loop.time()
-        started = False
-        settled_at: float | None = None
         while True:
             await asyncio.sleep(CONFIGS.POLL_INTERVAL_SECONDS)
             tiles = await self._snapshot_media()
-            new_ids = list(
-                dict.fromkeys(
-                    tile.finished_id
-                    for tile in tiles
-                    if tile.finished_id is not None
-                    and tile.finished_id not in known_ids
-                    and tile.item.kind == expected_kind
-                )
-            )
-            pending = sum(tile.item.pending for tile in tiles)
-            started = started or pending > pending_before or bool(new_ids)
-            now = loop.time()
-
-            if len(new_ids) >= expected_outputs:
-                return tuple(new_ids)
-            if started and pending <= pending_before:
-                # Flow may drop outputs (e.g. safety filtering); once nothing of
-                # ours is pending, return what was produced.
-                if new_ids:
-                    return tuple(new_ids)
-                if settled_at is None:
-                    settled_at = now
-                if now - settled_at >= CONFIGS.GENERATION_FAILURE_GRACE_SECONDS:
-                    failure = GenerationError(
-                        "Google Flow finished the generation without producing media."
-                    )
-                    await self._note_flow_message(failure)
-                    raise failure
-            else:
-                settled_at = None
-
-            if (
-                not started
-                and now - started_at >= CONFIGS.GENERATION_START_TIMEOUT_SECONDS
+            # A submission adds a tile; finishing one only changes its state.
+            if len(tiles) > len(before) or (
+                sum(tile.item.pending for tile in tiles) > pending_before
             ):
+                self._jobs[job] = _JobState(
+                    baseline=len(_finished_tiles(before, expected_kind))
+                )
+                return job
+            if loop.time() - started_at >= CONFIGS.GENERATION_START_TIMEOUT_SECONDS:
                 failure = GenerationError("Google Flow did not start the generation.")
                 await self._note_flow_message(failure)
                 raise failure
-            if now - started_at >= timeout:
-                failure = GenerationError(
-                    f"Google Flow did not finish the generation within {timeout:g}s."
+
+    async def _wait_for_jobs(
+        self, jobs: tuple[GenerationJob, ...], timeout: Seconds
+    ) -> dict[GenerationJob, tuple[MediaId, ...]]:
+        for job in jobs:
+            if job not in self._jobs:
+                raise ValueError(
+                    "job was not started by this project or was already collected"
                 )
-                if new_ids:
-                    failure.add_note(f"Media finished so far: {', '.join(new_ids)}.")
+        await self._ensure_on_workspace()
+        deadline = asyncio.get_running_loop().time() + timeout
+        for kind in dict.fromkeys(job.kind for job in jobs):
+            uncollected = {
+                job: state
+                for job, state in self._jobs.items()
+                if job.kind == kind and state.outputs is None
+            }
+            if uncollected:
+                await self._collect(kind, uncollected, deadline)
+        return {job: self._jobs.pop(job).outputs or () for job in jobs}
+
+    async def _collect(
+        self,
+        kind: OutputKind,
+        jobs: Mapping[GenerationJob, _JobState],
+        deadline: float,
+    ) -> None:
+        """Wait for every uncollected ``kind`` job and record their outputs.
+
+        New tiles are the newest finished tiles of ``kind`` beyond the count
+        before the earliest job. With more than one job, each tile is opened
+        in the editor and attributed by the prompt Flow shows for it.
+        """
+        baseline = min(state.baseline for state in jobs.values())
+        expected = sum(job.outputs for job in jobs)
+        loop = asyncio.get_running_loop()
+        settled_at: float | None = None
+        while True:
+            tiles = await self._snapshot_media()
+            finished = _finished_tiles(tiles, kind)
+            new = finished[: max(0, len(finished) - baseline)]
+            now = loop.time()
+            if len(new) >= expected:
+                break
+            if any(tile.item.pending for tile in tiles):
+                settled_at = None
+            else:
+                # Flow may drop outputs (e.g. safety filtering); once nothing
+                # is pending, attribute what was produced.
+                settled_at = now if settled_at is None else settled_at
+                if now - settled_at >= CONFIGS.GENERATION_FAILURE_GRACE_SECONDS:
+                    break
+            if now >= deadline:
+                failure = GenerationError(
+                    f"Google Flow did not finish {len(jobs)} {kind} generation(s) "
+                    "in time."
+                )
                 await self._note_flow_message(failure)
                 raise failure
+            await asyncio.sleep(CONFIGS.POLL_INTERVAL_SECONDS)
+
+        outputs: dict[GenerationJob, list[MediaId]] = {job: [] for job in jobs}
+        tile_ids = [
+            media_id for _, tile in new if (media_id := tile.item.media_id) is not None
+        ]
+        if len(jobs) == 1 and len(tile_ids) == len(new):
+            # Every new tile is the only job's, and each exposes its ID.
+            (job,) = jobs
+            outputs[job] = tile_ids
+        else:
+            opened: set[MediaId] = set()
+            for index, tile in new:
+                media_id, shown_prompt = await self._open_tile(index)
+                if media_id in opened:
+                    raise UnexpectedPageStateError(
+                        "Flow reordered the media grid while its tiles were "
+                        "being attributed."
+                    )
+                opened.add(media_id)
+                if (job := _job_for_prompt(shown_prompt, outputs)) is not None:
+                    # A tile's own ID is the one its menu and the editor accept.
+                    outputs[job].append(tile.item.media_id or media_id)
+        for job, state in jobs.items():
+            state.outputs = tuple(outputs[job][: job.outputs])
+
+    async def _open_tile(self, index: int) -> tuple[MediaId, PromptText]:
+        """Open the grid tile at ``index`` in the editor; return its ID and prompt."""
+        results = await self._web_page.run(
+            "open_media_tile", {"index": str(index), "project_url": self.project_url}
+        )
+        media_id = edit_id_from_url(text_result(results, "url"), self.project_magic)
+        if media_id is None:
+            raise UnexpectedPageStateError("Flow did not open the media editor.")
+        prompt = text_result(results, "prompt")
+        await self._back_to_workspace()
+        return media_id, prompt
+
+    async def _back_to_workspace(self) -> None:
+        """Go back from a page opened from the workspace, without reloading it.
+
+        A reload can reorder the grid (the live grid keeps submission order),
+        so grid indices taken before stay valid only this way.
+        """
+        page = self._require_page()
+        await page.go_back(wait_until="commit")
+        if not is_project_url(page.url, self.project_magic):
+            raise UnexpectedPageStateError(
+                "Going back did not return to the project workspace."
+            )
+        await self._web_page.run("wait_for_workspace")
 
     async def _run_media_menu_action(
         self, media_id: MediaId, item_label: MediaMenuItem, action: MediaAction
@@ -1086,7 +1405,8 @@ class GoogleFlowProject(SitePage):
         try:
             await self._ensure_on_workspace()
             await self._web_page.run(
-                "run_media_menu_item", {"media_id": media_id, "item": item_label}
+                "run_media_menu_item",
+                {"media_id": media_id, "item": _menu_item_pattern(item_label)},
             )
         except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = MediaActionError(media_id, action)
@@ -1156,6 +1476,14 @@ class GoogleFlowProject(SitePage):
 
 
 # Helpers
+
+# The text of the element's tooltip, which Material links by aria-describedby.
+_DESCRIPTION_JS: Final = """
+(element) => {
+    const id = element.getAttribute("aria-describedby");
+    return id ? document.getElementById(id)?.textContent ?? null : null;
+}
+"""
 
 _SNAPSHOT_MEDIA_JS: Final = """
 ([tileSelector, pendingSelector, contentUrl]) => {
@@ -1252,12 +1580,82 @@ def _tile_from_raw(raw_tile: RawJson) -> _Tile:
     )
 
 
+def _note_created_project(failure: BaseException, url: Url) -> None:
+    """Name the project Flow had already created when ``new`` failed."""
+    try:
+        project_magic = project_magic_from_url(url)
+    except ProjectCreationError:
+        return
+    failure.add_note(
+        f"Google Flow had already created project {project_magic!r}; "
+        "it was left in place."
+    )
+
+
 def _ensure_opened(url: Url, project_magic: ProjectMagic) -> None:
     """Raise unless ``url`` is the workspace of the project being opened."""
     if is_not_found_url(url):
         raise ProjectNotFoundError(project_magic)
     if not is_project_url(url, project_magic):
         raise ProjectOpenError(project_magic)
+
+
+def _finished_tiles(
+    tiles: Iterable[_Tile], kind: OutputKind
+) -> list[tuple[int, _Tile]]:
+    """Finished tiles of ``kind`` with their grid index, newest first."""
+    return [
+        (index, tile)
+        for index, tile in enumerate(tiles)
+        if tile.item.kind == kind and not tile.item.pending
+    ]
+
+
+def _job_for_prompt(
+    shown_prompt: PromptText, outputs: Mapping[GenerationJob, list[MediaId]]
+) -> GenerationJob | None:
+    """The job still missing outputs whose prompt Flow shows for a tile."""
+    shown = " ".join(shown_prompt.split())
+    waiting = [job for job, found in outputs.items() if len(found) < job.outputs]
+    # An exact match first; the editor may add text around the prompt.
+    return next(
+        (job for job in waiting if " ".join(job.prompt.split()) == shown),
+        next((job for job in waiting if " ".join(job.prompt.split()) in shown), None),
+    )
+
+
+# Other labels of media menu entries. Flow follows the account and browser
+# language, so en-GB spellings may show, and Favorite reads "Remove favorite"
+# on a favourite.
+_MENU_ITEM_VARIANTS: Final[Mapping[MediaMenuItem, tuple[str, ...]]] = MappingProxyType(
+    {
+        "Favorite": ("Favourite", "Remove favorite", "Remove favourite"),
+        "Move to trash": ("Move to bin",),
+    }
+)
+
+
+def _menu_item_pattern(item: MediaMenuItem) -> str:
+    """The ``media_menu_item`` regex matching any label of ``item``."""
+    labels = (item, *_MENU_ITEM_VARIANTS.get(item, ()))
+    return "|".join(ESCAPES["regex"](label) for label in labels)
+
+
+def _checked_label(results: Mapping[str, object], group: str) -> str | None:
+    """The label a settings group has checked, or ``None`` if Flow hides it."""
+    labels = texts_result(results, group)
+    return labels[0] if labels else None
+
+
+def _summary_labels(summary: str) -> tuple[SettingLabel, ...]:
+    """The labels in the settings trigger's summary, e.g. "Video · 720p · 4s x1"."""
+    return tuple(summary.replace("·", " ").split())
+
+
+def _default_timeout(kind: OutputKind) -> Seconds:
+    if kind == "video":
+        return CONFIGS.VIDEO_GENERATION_TIMEOUT_SECONDS
+    return CONFIGS.IMAGE_GENERATION_TIMEOUT_SECONDS
 
 
 def _normalize_media_ids(media_ids: Iterable[str]) -> tuple[MediaId, ...]:

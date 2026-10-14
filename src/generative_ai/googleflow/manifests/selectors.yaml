@@ -14,55 +14,105 @@ selectors:
   header_upload_menu_item: ".cdk-overlay-container [role='menuitem']:has-text('Upload')"
   new_scene_menu_item: ".cdk-overlay-container [role='menuitem']:has-text('New scene')"
 
-  # Prompt box. The ingredient trigger is not rendered in video Frames mode,
-  # so the editor is what marks a loaded workspace.
+  # Prompt box. Video Frames mode renders no ingredient trigger, so the
+  # editor is what marks a loaded workspace.
   prompt_editor: "flow-base-prompt-box .ProseMirror[contenteditable='true']"
+  # It also removes the ingredients and frames, and shows whenever any is set.
   clear_prompt_button: "flow-base-prompt-box button[aria-label='Clear prompt']"
   generate_button: "flow-base-prompt-box button.generate-icon-button"
+  # Its tooltip, linked by aria-describedby, says why the button is disabled.
+  generate_button_host: flow-base-prompt-box flow-generate-icon-button
   agent_mode_chip: "flow-base-prompt-box button.agent-mode-chip"
   agent_mode_chip_pressed: "flow-base-prompt-box button.agent-mode-chip[aria-pressed='{pressed:string}']"
-  ingredient_chip: "flow-prompt-box flow-ingredient-chip"
-  ready_ingredient_chip: "flow-prompt-box flow-ingredient-chip >> nth={index} >> [aria-busy='false']"
-  # {slot} is the empty slot's label: Start or End.
-  frame_slot: "flow-ingredient-bar button.empty-chip:text-is('{slot:string}')"
+  # Ingredients and frames are chips in the bar above the editor. A chip's
+  # image arrives after aria-busy turns false, so both mark it as loaded.
+  ready_ingredient: 'flow-ingredient-bar button[aria-busy="false"]:has(img[src*="/{media_id:string}"]) >> nth=0'
+  # {position} is 0 for the Start frame and 1 for the End frame.
+  ready_frame: 'flow-ingredient-bar .frame-trigger >> nth={position:string} >> button[aria-busy="false"]:has(img[src*="/{media_id:string}"])'
   swap_frames_button: "button[aria-label='Swap first and last frames']"
-  open_add_menu_button: .add-menu-trigger
 
-  # Generation settings popover
+  # Generation settings popover. Each group of toggles is a flow-toggles
+  # labelled Mode, Video type, Aspect ratio, Video resolution, Video duration
+  # or Output count; which groups show depends on the mode.
   settings_trigger: "flow-base-prompt-box button.settings-trigger-button"
+  # The trigger's summary, e.g. "Video · 720p · 4s crop_16_9 x1". It also
+  # names values whose group the panel hides, such as Veo's fixed 720p.
+  settings_summary: "flow-base-prompt-box .settings-summary"
   settings_panel: flow-prompt-box-settings
   model_family_button: "flow-prompt-box-settings button[aria-label='Select model family']"
   selected_model_button: "flow-prompt-box-settings button[aria-label='Select model family']:has-text('{model:string}')"
-  setting_options: "flow-prompt-box-settings >> role=radio"
-  checked_setting_options: "flow-prompt-box-settings >> role=radio[checked=true]"
-  setting_option: 'flow-prompt-box-settings >> role=radio[name=/(?:^|\s){label:regex}$/] >> nth=0'
-  checked_setting_option: 'flow-prompt-box-settings >> role=radio[name=/(?:^|\s){label:regex}$/][checked=true] >> nth=0'
+  checked_mode: "flow-prompt-box-settings flow-toggles[aria-label='Mode'] >> role=radio[checked=true]"
+  checked_video_type: "flow-prompt-box-settings flow-toggles[aria-label='Video type'] >> role=radio[checked=true]"
+  checked_aspect_ratio: "flow-prompt-box-settings flow-toggles[aria-label='Aspect ratio'] >> role=radio[checked=true]"
+  checked_video_resolution: "flow-prompt-box-settings flow-toggles[aria-label='Video resolution'] >> role=radio[checked=true]"
+  checked_video_duration: "flow-prompt-box-settings flow-toggles[aria-label='Video duration'] >> role=radio[checked=true]"
+  checked_output_count: "flow-prompt-box-settings flow-toggles[aria-label='Output count'] >> role=radio[checked=true]"
+  setting_options: 'flow-prompt-box-settings flow-toggles[aria-label="{group:string}"] >> role=radio'
+  # Matched on the label span, not the accessible name: an option's info
+  # icon (e.g. on 360p) adds its tooltip text to the name.
+  setting_option: 'flow-prompt-box-settings flow-toggles[aria-label="{group:string}"] button[role=radio]:has(.toggle-text:text-is("{label:string}")) >> nth=0'
+  checked_setting_option: 'flow-prompt-box-settings flow-toggles[aria-label="{group:string}"] button[role=radio][aria-checked=true]:has(.toggle-text:text-is("{label:string}")) >> nth=0'
   model_menu: ".cdk-overlay-container [role='menu'] >> nth=-1"
   model_options: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem"
   model_option: '.cdk-overlay-container [role=''menu''] >> nth=-1 >> role=menuitem[name=/(?:^|\s){model:regex}$/] >> nth=0'
 
-  # Asset picker, shared by ingredients, frame slots and scene clips
+  # Asset picker popover. Its thumbnails carry no media ID, so media are
+  # added to the prompt from their grid tile's menu instead.
   add_menu_popover: flow-add-menu-popover-content
-  picker_asset: 'flow-add-menu-popover-content flow-add-menu-asset-item:has(img[src*="/{media_id:string}"]) >> nth=0'
 
   # Media grid
   media_tile: flow-grid-tile-container
   pending_tile: flow-pending-tile
-  media_tile_by_id: 'flow-grid-tile-container:has([data-media-id="{media_id:string}"])'
+  # A video tile has no data-media-id; until a reload swaps it for an opaque
+  # URL, its thumbnail's flow-content URL carries the ID list_media reports.
+  media_tile_by_id: 'flow-grid-tile-container:has([data-media-id="{media_id:string}"], img[src^="https://flow-content.google/"][src*="/{media_id:string}?"])'
   media_tile_restore_button: 'flow-grid-tile-container:has([data-media-id="{media_id:string}"]) >> role=button[name="Restore"s]'
 
-  # A tile's context menu (it mirrors More options) and its Download submenu
+  media_tile_at: "flow-grid-tile-container >> nth={index:string}"
+
+  # Media editor at {project_url}/edit/{id}. It accepts a tile's data-media-id,
+  # the ID in its flow-content URLs, and the ID a tile click navigates to.
+  # Video tiles carry no data-media-id, so videos are downloaded from here.
+  editor_prompt: "flow-expandable-prompt .prompt-text"
+  editor_download_button: "flow-editor-header button[aria-label='Download media']"
+  editor_enabled_download_button: "flow-editor-header button[aria-label='Download media']:not([disabled])"
+  # Present only for media with a choice of sizes; uploads download at once.
+  editor_download_menu_trigger: "flow-editor-header button[aria-label='Download media'][aria-haspopup='menu']"
+  # The menu's first entry: entries render a moment after the menu shows.
+  editor_download_menu_item: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem >> nth=0"
+  editor_download_options: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem[disabled=false]"
+  editor_download_option: '.cdk-overlay-container [role=''menu''] >> nth=-1 >> role=menuitem[name=/^{quality:regex}\b/][disabled=false] >> nth=0'
+  editor_upscaled_download_option: '.cdk-overlay-container [role=''menu''] >> nth=-1 >> role=menuitem[name=/^{quality:regex}\b.*Upscaled/][disabled=false] >> nth=0'
+  # Videos list "270p Animated GIF" first and paid upscales last.
+  editor_original_download_option: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem[name=/Original size/][disabled=false] >> nth=0"
+  editor_first_download_option: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem[disabled=false] >> nth=0"
+
+  # A tile's context menu (it mirrors More options) and its Download submenu.
+  # {item} is a regex alternation of an entry's labels, which differ between
+  # English locales (Favorite|Favourite), each escaped by the caller.
   media_menu: ".cdk-overlay-container [role='menu'] >> nth=0"
-  media_menu_item: '.cdk-overlay-container [role=''menu''] >> nth=0 >> role=menuitem[name=/(?:^|\s){item:regex}$/]'
+  media_menu_item: '.cdk-overlay-container [role=''menu''] >> nth=0 >> role=menuitem[name=/(?:^|\s)(?:{item})$/]'
   media_menu_download: '.cdk-overlay-container [role=''menu''] >> nth=0 >> role=menuitem[name=/(?:^|\s)Download$/]'
-  download_submenu: ".cdk-overlay-container [role='menu'] >> nth=1"
+  # Present only for media with a choice of sizes; uploads download at once.
+  media_menu_download_submenu_trigger: ".cdk-overlay-container [role='menu'] >> nth=0 >> [role='menuitem'][aria-haspopup='menu']:has-text('Download')"
+  download_submenu_item: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem >> nth=0"
   download_options: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem[disabled=false]"
+  original_download_option: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem[name=/Original size/][disabled=false] >> nth=0"
   first_download_option: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem[disabled=false] >> nth=0"
   download_option: '.cdk-overlay-container [role=''menu''] >> nth=1 >> role=menuitem[name=/^{quality:regex}\b/][disabled=false] >> nth=0'
+  upscaled_download_option: '.cdk-overlay-container [role=''menu''] >> nth=1 >> role=menuitem[name=/^{quality:regex}\b.*Upscaled/][disabled=false] >> nth=0'
+
+  # An upscaled download starts once Flow has upscaled the media; a failed
+  # upscale shows only a snackbar, often within a second.
+  upscaling_message: "mat-snack-bar-container:has-text('Upscaling your') >> nth=-1"
+  upscale_outcome_message: "mat-snack-bar-container:has-text('Upscaling complete'), mat-snack-bar-container:has-text('Upscaling failed') >> nth=-1"
+  upscale_failed_message: "mat-snack-bar-container:has-text('Upscaling failed') >> nth=-1"
 
   # Shared overlays
   overlay_menu: ".cdk-overlay-container [role='menu']"
   visible_snackbars: "mat-snack-bar-container >> visible=true"
+  # Left out of a snackbar's message: its icon and its Dismiss or Undo buttons.
+  snackbar_controls: mat-icon, button
   consent_agree_button: "role=button[name='I agree']"
   # Material icons render as ligature text ("crop_16_9"); left out of labels.
   icons: mat-icon

@@ -23,6 +23,9 @@ htmlcov/
 # Browser profile (cookies, sessions)
 google-profile/
 
+# Generated media
+output/
+
 # Editors / OS
 .vscode/
 .idea/

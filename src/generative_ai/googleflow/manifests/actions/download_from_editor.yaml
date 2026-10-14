@@ -1,0 +1,62 @@
+name: download_from_editor
+selectors_name: googleflow
+params: [edit_url, quality, to]
+steps:
+  - goto: "{edit_url}"
+  - wait_for: editor_download_button
+  # The editor of an unknown ID renders too, but its Download stays disabled;
+  # for real media it is enabled at once.
+  - if:
+      visible: {target: editor_enabled_download_button, timeout: 10000}
+      then: []
+      else:
+        - fail: "Google Flow has no media at {edit_url}."
+  # Generated media offer sizes in a menu; uploads download at once.
+  - download:
+      to: "{to}"
+      as: path
+      timeout: 120000
+      steps:
+        - if:
+            exists: editor_download_menu_trigger
+            then:
+              - click: editor_download_button
+              - wait_for: editor_download_menu_item
+              # An empty quality means the original size, or else the first
+              # enabled entry.
+              - if:
+                  param: quality
+                  then:
+                    - if:
+                        exists: editor_download_option
+                        then:
+                          - if:
+                              exists: editor_upscaled_download_option
+                              then:
+                                # An earlier upscale's snackbar, which stays
+                                # up a few seconds, would read as this outcome.
+                                - wait_for: {target: upscale_outcome_message, state: hidden, timeout: 10000, optional: true}
+                                - click: editor_download_option
+                                # Flow upscales first, and reports a failure
+                                # in a snackbar instead of downloading.
+                                - wait_for: {target: upscaling_message, timeout: 5000, optional: true}
+                                - wait_for: {target: upscale_outcome_message, timeout: 110000, optional: true}
+                                - if:
+                                    visible: upscale_failed_message
+                                    then:
+                                      - get_all_texts: {target: visible_snackbars, exclude: snackbar_controls, as: flow_messages}
+                                      - fail: "Google Flow could not upscale the media to '{quality}'."
+                              else:
+                                - click: editor_download_option
+                        else:
+                          - get_all_texts: {target: editor_download_options, exclude: icons, as: available}
+                          - fail: "Google Flow does not offer download quality '{quality}'."
+                  else:
+                    - if:
+                        exists: editor_original_download_option
+                        then:
+                          - click: editor_original_download_option
+                        else:
+                          - click: editor_first_download_option
+            else:
+              - click: editor_download_button

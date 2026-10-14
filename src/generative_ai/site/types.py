@@ -7,7 +7,7 @@ type RawJson = object
 """A value returned from page JavaScript, before it is checked."""
 
 # Units
-type Seconds = float
+type Seconds = float | int
 type Pixels = int
 
 # Identifiers

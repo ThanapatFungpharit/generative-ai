@@ -1,5 +1,0 @@
-name: wait_for_frame_filled
-selectors_name: googleflow
-params: slot
-steps:
-  - wait_for: {target: frame_slot, state: hidden}

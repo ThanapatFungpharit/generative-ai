@@ -5,4 +5,7 @@ steps:
   - goto: "{base_url}"
   - wait_for: new_project_button
   - click: new_project_button
-  - wait_for: open_add_menu_button
+  - wait_for_url: "{base_url}project/*"
+  # A new project opens in the last-used mode, which may render no
+  # ingredient trigger (video Frames), so wait for the editor.
+  - wait_for: prompt_editor
