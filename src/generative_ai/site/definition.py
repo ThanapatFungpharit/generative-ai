@@ -18,8 +18,8 @@ if TYPE_CHECKING:
 
     from web_page.types import CssSelector, Milliseconds, RawYaml, SelectorKey
 
-    from generative_ai.site.protocols import BrowserPage
-    from generative_ai.site.types import Pixels, SiteName, Url
+    from generative_ai.site.protocols import BrowserPage, ViewportSize
+    from generative_ai.site.types import SiteName, Url
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,9 +34,8 @@ class Site:
     base_url: Url
     manifests_dir: Path
     navigation_timeout_ms: Milliseconds = 30_000.0
-    # Sites that switch to a mobile layout on narrow viewports set a floor.
-    min_viewport_width: Pixels = 0
-    min_viewport_height: Pixels = 0
+    # Sites whose layout shifts with the viewport pin one exact size.
+    viewport: ViewportSize | None = None
 
     @property
     def selectors_path(self) -> Path:
@@ -64,17 +63,10 @@ class Site:
         page.set_default_timeout(self.navigation_timeout_ms)
         page.set_default_navigation_timeout(self.navigation_timeout_ms)
 
-        viewport = page.viewport_size
-        if viewport is not None and (
-            viewport["width"] < self.min_viewport_width
-            or viewport["height"] < self.min_viewport_height
-        ):
-            await page.set_viewport_size(
-                {
-                    "width": max(viewport["width"], self.min_viewport_width),
-                    "height": max(viewport["height"], self.min_viewport_height),
-                }
-            )
+        # Enforced in both directions, and also for ``no_viewport=True`` contexts
+        # (``viewport_size`` is None); once emulated, window resizes cannot move it.
+        if self.viewport is not None and page.viewport_size != self.viewport:
+            await page.set_viewport_size(self.viewport)
 
         web_page = WebPage(page)
         await web_page.load_selectors(self.selectors_path)

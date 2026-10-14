@@ -71,8 +71,9 @@ and the account, and an unavailable value raises an error listing what Flow
 offers.
 
 Selectors and linear UI flows live in `src/generative_ai/googleflow/manifests/`.
-Pages are kept at least 1280×720 because narrower viewports switch Flow to a
-mobile layout with different controls.
+Every page's viewport is locked to 1280×720, whatever the context or window
+size, because Flow's layout shifts with the viewport (narrower ones switch to a
+mobile layout with different controls).
 
 ## Joining clips into one video
 
@@ -91,6 +92,22 @@ await assemble_video(
 )
 ```
 
+## Live tests
+
+`tests/live/` drives the real Flow site and is skipped unless `--live` is
+passed. Each test creates throwaway projects and deletes them afterwards. Tests
+that spend generation credits also need `--live-credits`.
+
+```bash
+uv run python -m tests.live.sign_in   # once: sign in to Google in ./google-profile
+uv run pytest --live
+```
+
+`--flow-profile` (or `GOOGLE_FLOW_PROFILE`) picks another profile. A profile
+made by installed Google Chrome needs `--flow-channel chrome` (or
+`GOOGLE_FLOW_CHANNEL=chrome`), because bundled Chromium cannot decrypt Chrome's
+cookies and Flow then sees no sign-in.
+
 ## Adding a site
 
 Site-independent code lives in `generative_ai.site`; `googleflow` is the
@@ -106,7 +123,7 @@ reference implementation. A new site `foo` needs:
    )
    ```
 
-   `Site.attach(page)` sets timeouts and a minimum viewport, then loads every
+   `Site.attach(page)` sets timeouts and locks the viewport, then loads every
    manifest; `get_site("foo")` finds it by name.
 3. `foo/exceptions.py` — errors deriving from `SiteError`.
 4. `foo/page.py` — a `SitePage` subclass. Implement `_closed_error`, decorate
