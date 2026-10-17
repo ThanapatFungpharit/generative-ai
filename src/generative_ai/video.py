@@ -111,7 +111,13 @@ async def assemble_video(
     # Encoded beside ``output`` and moved there once verified, so a failed or
     # interrupted run never leaves a truncated file under the final name.
     # The suffix stays last: ffmpeg picks the container from it.
-    partial = output.with_name(f"{output.stem}.partial{output.suffix}")
+    with tempfile.NamedTemporaryFile(
+        prefix=f"{output.stem}.",
+        suffix=f".partial{output.suffix}",
+        dir=output.parent,
+        delete=False,
+    ) as temporary:
+        partial = Path(temporary.name)
     try:
         await _encode(
             clips,

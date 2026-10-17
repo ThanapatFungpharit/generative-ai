@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from web_page import WebPage
 from web_page.utils import is_str_dict
@@ -16,6 +16,7 @@ from generative_ai.site.guards import is_str_keyed_mapping
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from playwright.async_api import Page as ChromiumPage
     from web_page.types import CssSelector, Milliseconds, RawYaml, SelectorKey
 
     from generative_ai.site.protocols import BrowserPage, ViewportSize
@@ -36,6 +37,8 @@ class Site:
     navigation_timeout_ms: Milliseconds = 30_000.0
     # Sites whose layout shifts with the viewport pin one exact size.
     viewport: ViewportSize | None = None
+    # Chromium sites which defer work when their tab loses visibility or focus.
+    keep_active: bool = False
 
     @property
     def selectors_path(self) -> Path:
@@ -72,4 +75,23 @@ class Site:
         await web_page.load_selectors(self.selectors_path)
         for action in self.action_paths:
             await web_page.load_action(action)
+
+        if self.keep_active:
+            # Set this before the first navigation, so lazy bootstrap code sees
+            # an active page even if another constructor creates a newer tab.
+            # Keep the session attached: detaching clears the emulation. The
+            # browser owns it until the target closes (including failed opens).
+            session = await page.context.new_cdp_session(cast("ChromiumPage", page))
+            try:
+                await session.send(
+                    "Emulation.setFocusEmulationEnabled", {"enabled": True}
+                )
+            except BaseException as error:
+                try:
+                    await session.detach()
+                except Exception as cleanup_error:  # noqa: BLE001
+                    error.add_note(
+                        f"Focus session cleanup also failed: {cleanup_error}"
+                    )
+                raise
         return web_page

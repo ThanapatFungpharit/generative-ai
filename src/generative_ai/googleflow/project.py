@@ -3,18 +3,18 @@ from __future__ import annotations
 import asyncio
 import mimetypes
 import re
+import warnings
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Self, TypedDict, TypeIs, override
-from urllib.parse import urlparse
 from uuid import uuid4
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from web_page.exceptions import ActionFailed
-from web_page.utils import ESCAPES, is_str_list
+from web_page.utils import ESCAPES, fill, is_str_list
 
 from generative_ai.googleflow.constants import CONFIGS, SELECTORS, SITE, URLS
 from generative_ai.googleflow.exceptions import (
@@ -110,8 +110,10 @@ class _Tile:
 class _JobState:
     """What a started generation is attributed against."""
 
-    baseline: int
-    """Finished tiles of the job's kind in the grid before it was submitted."""
+    baseline: frozenset[MediaId]
+    """Media already present before submission, plus unrelated uploads."""
+    found: dict[MediaId, None] = field(default_factory=dict)
+    """Matched outputs retained across polling snapshots and retryable waits."""
     outputs: tuple[MediaId, ...] | None = None
     """``None`` until the job's tiles have been attributed."""
 
@@ -125,7 +127,13 @@ class GoogleFlowProject(SitePage):
     media-scoped locators, file choosers, branching, and polling).
     """
 
-    __slots__ = ("_flow_messages", "_jobs", "_project_magic", "_project_url")
+    __slots__ = (
+        "_flow_messages",
+        "_jobs",
+        "_media_editor_ids",
+        "_project_magic",
+        "_project_url",
+    )
 
     def __init__(
         self, project_magic: str, page: BrowserPage, web_page: WebPage
@@ -134,6 +142,9 @@ class GoogleFlowProject(SitePage):
         self._project_magic = normalize_project_magic(project_magic)
         self._project_url = f"{URLS.project}{self._project_magic}"
         self._jobs: dict[GenerationJob, _JobState] = {}
+        # Video content IDs and editor IDs differ. Thumbnails lose the content
+        # ID after a reload, but opening a tile still reveals its editor ID.
+        self._media_editor_ids: dict[MediaId, MediaId] = {}
         # Snackbars seen while polling. They vanish after a few seconds, long
         # before a wait times out; failures report them, then clear them.
         self._flow_messages: dict[str, None] = {}
@@ -234,19 +245,16 @@ class GoogleFlowProject(SitePage):
             await page.close()
         except PlaywrightError as error:
             raise ProjectCloseError(self.project_magic) from error
-        finally:
-            self._page = None
-
         if not page.is_closed():
             raise ProjectCloseError(self.project_magic)
+        self._page = None
 
     @page_required
     async def rename(self, new_name: str) -> None:
-        """Rename this project and return its page to the project workspace.
+        """Rename this project from its workspace header.
 
         Leading and trailing whitespace is removed from ``new_name``. Success
-        means the projects page displayed the new name and the original project
-        workspace was loaded again.
+        means the header shows the new name as the saved project name.
 
         Raises:
             ValueError: ``new_name`` is empty or contains only whitespace.
@@ -257,15 +265,8 @@ class GoogleFlowProject(SitePage):
             raise ValueError("new_name must not be empty or whitespace")
 
         try:
-            await self._web_page.run(
-                "rename_project",
-                {
-                    "base_url": URLS.base,
-                    **self._project_card_params(),
-                    "new_name": new_name,
-                },
-            )
-            await self._return_to_workspace()
+            await self._ensure_on_workspace()
+            await self._web_page.run("rename_project", {"new_name": new_name})
         except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = ProjectRenameError(self.project_magic)
             await self._restore_project_page_after_failure(failure)
@@ -286,14 +287,24 @@ class GoogleFlowProject(SitePage):
         """
         page = self._require_page()
         confirmation_attempted = False
-        card_params = self._project_card_params()
         try:
-            await self._web_page.run(
-                "open_delete_project_dialog", {"base_url": URLS.base, **card_params}
-            )
+            await self._ensure_on_workspace()
+            await self._web_page.run("open_delete_project_dialog")
             confirmation_attempted = True
-            await self._web_page.run("confirm_delete_project", card_params)
+            await self._web_page.run("confirm_delete_project")
             await self._verify_deletion(page)
+        except asyncio.CancelledError as error:
+            if confirmation_attempted:
+                error.add_note(
+                    "Deletion confirmation was attempted; the remote project "
+                    "state is unknown. The project facade has been closed."
+                )
+                self._page = None
+                cleanup_error = await close_page_and_report_failure(page)
+                note_cleanup_failure(error, cleanup_error)
+            else:
+                await self._restore_project_page_after_failure(error)
+            raise
         except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = ProjectDeletionError(self.project_magic)
             if confirmation_attempted:
@@ -371,6 +382,16 @@ class GoogleFlowProject(SitePage):
             media_id_by_token = await self._wait_for_uploaded_media(
                 kind_by_token, known_ids, timeout
             )
+            video_ids = {
+                media_id_by_token[token]
+                for token, kind in kind_by_token.items()
+                if kind == "video"
+            }
+            if video_ids:
+                for index, tile in enumerate(await self._snapshot_media()):
+                    if tile.finished_id in video_ids:
+                        editor_id, _ = await self._open_tile(index)
+                        self._media_editor_ids[tile.finished_id] = editor_id
         except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = MediaUploadError("Google Flow could not upload the media.")
             operation_error = failure
@@ -392,6 +413,10 @@ class GoogleFlowProject(SitePage):
                         "be restored to a known state."
                     ) from cleanup_error
 
+        # Uploads may complete while generation jobs are outstanding. They must
+        # never be considered generation results, even if they are newest.
+        for state in self._jobs.values():
+            state.baseline |= frozenset(media_id_by_token.values())
         return {
             file_by_token[token]: media_id_by_token[token] for token in file_by_token
         }
@@ -459,9 +484,26 @@ class GoogleFlowProject(SitePage):
     async def set_agent_mode(self, enabled: bool) -> None:
         """Turn the prompt box's Agent mode on or off.
 
+        Warning:
+            Enabling Agent mode makes Flow reset the generation settings (model,
+            aspect ratio, outputs) and the configuration carries over to other
+            projects, leaving them in an unexpected state. Turn it off again
+            and re-apply your settings (``configure`` or the ``generate_*``
+            arguments) before relying on them. Enabling emits a
+            ``UserWarning``.
+
         Raises:
             GenerationSettingsError: The Agent chip cannot be toggled.
         """
+        if enabled:
+            warnings.warn(
+                "Enabling Google Flow Agent mode removes the generation "
+                "settings and the change carries over to other projects, "
+                "leaving them in an unexpected state. Turn it off and "
+                "re-apply your settings afterwards.",
+                UserWarning,
+                stacklevel=2,
+            )
         try:
             await self._ensure_on_workspace()
             await self._set_agent_mode(enabled)
@@ -638,6 +680,9 @@ class GoogleFlowProject(SitePage):
                 returned by an earlier call.
             GenerationError: Flow does not finish in time, or the new tiles
                 cannot be read.
+
+        Repeated jobs in this call are collected once. Jobs with the same
+        prompt and kind must be submitted and collected sequentially.
         """
         jobs = tuple(jobs)
         if timeout is None:
@@ -749,6 +794,22 @@ class GoogleFlowProject(SitePage):
                     )
                     break
                 except ActionFailed:
+                    index = await self._find_media_tile(media_id)
+                    if index is not None:
+                        tile = self._require_page().locator(
+                            fill(SELECTORS["media_tile_at"], {"index": str(index)})
+                        )
+                        element = await tile.element_handle()
+                        if element is None:
+                            raise UnexpectedPageStateError("The bin tile disappeared.")
+                        try:
+                            await self._web_page.run(
+                                "restore_media_tile_at", {"index": str(index)}
+                            )
+                            await element.wait_for_element_state("hidden")
+                        finally:
+                            await element.dispose()
+                        break
                     if loop.time() >= deadline:
                         raise
             await self._return_to_workspace()
@@ -856,13 +917,6 @@ class GoogleFlowProject(SitePage):
     @override
     def _closed_error(self) -> Exception:
         return ProjectClosedError(self.project_magic)
-
-    def _project_card_params(self) -> Mapping[ParamName, str]:
-        """Params for the selectors that find this project's card by its link."""
-        return {
-            "project_path": urlparse(self.project_url).path,
-            "project_url": self.project_url,
-        }
 
     async def _return_to_workspace(self) -> None:
         """Load this project's workspace and verify Flow stayed on it."""
@@ -1087,10 +1141,22 @@ class GoogleFlowProject(SitePage):
         prompt = prompt.strip()
         if not prompt:
             raise ValueError("prompt must not be empty or whitespace")
+        if any(
+            job.kind == expected_kind
+            and state.outputs is None
+            and " ".join(job.prompt.split()) == " ".join(prompt.split())
+            for job, state in self._jobs.items()
+        ):
+            raise GenerationError(
+                "A generation with the same prompt is still uncollected. "
+                "Collect it before submitting another: Flow cannot reliably "
+                "distinguish concurrent jobs with identical prompts."
+            )
 
         self._flow_messages.clear()
         try:
             await self._ensure_on_workspace()
+            baseline = await self._generation_baseline(expected_kind)
             await self._set_agent_mode(False)
             await self._apply_settings(settings)
             # This also empties the ingredients and frames left from before.
@@ -1099,7 +1165,9 @@ class GoogleFlowProject(SitePage):
             for media_id in ingredients:
                 await self._add_ingredient(media_id)
             await self._fill_prompt(prompt)
-            return await self._submit_generation(prompt, expected_kind=expected_kind)
+            return await self._submit_generation(
+                prompt, expected_kind=expected_kind, baseline=baseline
+            )
         except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = GenerationError("Google Flow could not start the generation.")
             await self._note_flow_message(failure)
@@ -1212,10 +1280,10 @@ class GoogleFlowProject(SitePage):
             await self._select_setting("Mode", settings.mode)
         if settings.video_input is not None:
             await self._select_setting("Video type", settings.video_input)
-        if settings.aspect_ratio is not None:
-            await self._select_setting("Aspect ratio", settings.aspect_ratio)
         if settings.model is not None:
             await self._select_model(settings.model)
+        if settings.aspect_ratio is not None:
+            await self._select_setting("Aspect ratio", settings.aspect_ratio)
         # After the model: it decides which resolutions and durations exist.
         if settings.resolution is not None:
             await self._select_setting("Video resolution", settings.resolution)
@@ -1277,10 +1345,7 @@ class GoogleFlowProject(SitePage):
         The asset picker's thumbnails carry no media ID; the tile does.
         """
         try:
-            await self._web_page.run(
-                "run_media_menu_item",
-                {"media_id": media_id, "item": _menu_item_pattern("Add to prompt")},
-            )
+            await self._run_media_menu_item(media_id, "Add to prompt")
         except ActionFailed as error:
             raise MediaNotFoundError(media_id) from error
 
@@ -1289,8 +1354,32 @@ class GoogleFlowProject(SitePage):
         if text_result(results, "text").split() != prompt.split():
             raise GenerationError("Google Flow did not accept the prompt text.")
 
+    async def _generation_baseline(self, kind: OutputKind) -> frozenset[MediaId]:
+        """Resolve existing rendered media before preparing the new prompt.
+
+        After a reload videos may expose their ID only through the editor.
+        Resolve those too, before navigation could disturb prepared inputs.
+        """
+        known: set[MediaId] = set()
+        for index, tile in _finished_tiles(await self._snapshot_media(), kind):
+            media_id = tile.item.media_id
+            if media_id is not None:
+                known.add(media_id)
+            editor_id = self._media_editor_ids.get(media_id) if bool(media_id) else None
+            if media_id is None or (kind == "video" and editor_id is None):
+                editor_id, _ = await self._open_tile(index)
+                if media_id is not None:
+                    self._media_editor_ids[media_id] = editor_id
+            if editor_id is not None:
+                known.add(editor_id)
+        return frozenset(known)
+
     async def _submit_generation(
-        self, prompt: PromptText, *, expected_kind: OutputKind
+        self,
+        prompt: PromptText,
+        *,
+        expected_kind: OutputKind,
+        baseline: frozenset[MediaId],
     ) -> GenerationJob:
         """Click Generate and return once Flow shows a new tile for it."""
         page = self._require_page()
@@ -1325,12 +1414,17 @@ class GoogleFlowProject(SitePage):
             await asyncio.sleep(CONFIGS.POLL_INTERVAL_SECONDS)
             tiles = await self._poll_media()
             # A submission adds a tile; finishing one only changes its state.
-            if len(tiles) > len(before) or (
-                sum(tile.item.pending for tile in tiles) > pending_before
-            ):
-                self._jobs[job] = _JobState(
-                    baseline=len(_finished_tiles(before, expected_kind))
+            if (
+                len(tiles) > len(before)
+                or (sum(tile.item.pending for tile in tiles) > pending_before)
+                or any(
+                    tile.finished_id is not None
+                    and tile.finished_id not in baseline
+                    and tile.item.kind == expected_kind
+                    for tile in tiles
                 )
+            ):
+                self._jobs[job] = _JobState(baseline=baseline)
                 return job
             if loop.time() - started_at >= CONFIGS.GENERATION_START_TIMEOUT_SECONDS:
                 failure = GenerationError("Google Flow did not start the generation.")
@@ -1340,6 +1434,7 @@ class GoogleFlowProject(SitePage):
     async def _wait_for_jobs(
         self, jobs: tuple[GenerationJob, ...], timeout: Seconds
     ) -> dict[GenerationJob, tuple[MediaId, ...]]:
+        jobs = tuple(dict.fromkeys(jobs))
         for job in jobs:
             if job not in self._jobs:
                 raise ValueError(
@@ -1365,20 +1460,53 @@ class GoogleFlowProject(SitePage):
     ) -> None:
         """Wait for every uncollected ``kind`` job and record their outputs.
 
-        New tiles are the newest finished tiles of ``kind`` beyond the count
-        before the earliest job. With more than one job, each tile is opened
-        in the editor and attributed by the prompt Flow shows for it.
+        Compare identities instead of grid counts, and verify every output's
+        prompt. Retain matches across snapshots, including virtualized grids.
         """
-        baseline = min(state.baseline for state in jobs.values())
-        expected = sum(job.outputs for job in jobs)
         loop = asyncio.get_running_loop()
         settled_at: float | None = None
+        examined: set[MediaId] = set()
+        outputs = {job: list(state.found) for job, state in jobs.items()}
         while True:
             tiles = await self._poll_media()
-            finished = _finished_tiles(tiles, kind)
-            new = finished[: max(0, len(finished) - baseline)]
+            visible_ids: list[MediaId] = []
+            for index, tile in _finished_tiles(tiles, kind):
+                tile_id = tile.item.media_id
+                if tile_id is not None:
+                    visible_ids.append(tile_id)
+                if tile_id is not None and (
+                    tile_id in examined
+                    or all(tile_id in state.baseline for state in jobs.values())
+                ):
+                    continue
+                media_id, shown_prompt = await self._open_tile(index)
+                if tile_id is not None:
+                    self._media_editor_ids[tile_id] = media_id
+                if tile_id is None:
+                    visible_ids.append(media_id)
+                if media_id in examined:
+                    continue
+                examined.add(media_id)
+                if tile_id is not None:
+                    examined.add(tile_id)
+                job = _job_for_prompt(shown_prompt, outputs)
+                if job is not None:
+                    state = jobs[job]
+                    if media_id in state.baseline or tile_id in state.baseline:
+                        continue
+                    output_id = tile_id or media_id
+                    state.found[output_id] = None
+                    outputs[job] = list(state.found)
+            for job, state in jobs.items():
+                # Preserve the grid's newest-first order while retaining
+                # outputs that have scrolled out of its virtualized window.
+                state.found = dict.fromkeys(
+                    [media_id for media_id in visible_ids if media_id in state.found]
+                    + list(state.found)
+                )
+                outputs[job] = list(state.found)
             now = loop.time()
-            if len(new) >= expected:
+            if all(len(outputs[job]) >= job.outputs for job in jobs):
                 break
             if any(tile.item.pending for tile in tiles):
                 settled_at = None
@@ -1397,43 +1525,23 @@ class GoogleFlowProject(SitePage):
                 raise failure
             await asyncio.sleep(CONFIGS.POLL_INTERVAL_SECONDS)
 
-        outputs: dict[GenerationJob, list[MediaId]] = {job: [] for job in jobs}
-        tile_ids = [
-            media_id for _, tile in new if (media_id := tile.item.media_id) is not None
-        ]
-        if len(jobs) == 1 and len(tile_ids) == len(new):
-            # Every new tile is the only job's, and each exposes its ID.
-            (job,) = jobs
-            outputs[job] = tile_ids
-        else:
-            opened: set[MediaId] = set()
-            for index, tile in new:
-                media_id, shown_prompt = await self._open_tile(index)
-                if media_id in opened:
-                    raise UnexpectedPageStateError(
-                        "Flow reordered the media grid while its tiles were "
-                        "being attributed."
-                    )
-                opened.add(media_id)
-                if (job := _job_for_prompt(shown_prompt, outputs)) is not None:
-                    # A tile's own ID is the one its menu and the editor accept.
-                    outputs[job].append(tile.item.media_id or media_id)
         for job, state in jobs.items():
             state.outputs = tuple(outputs[job][: job.outputs])
 
     async def _open_tile(self, index: int) -> tuple[MediaId, PromptText]:
         """Open the grid tile at ``index`` in the editor; return its ID and prompt."""
+        from_bin = self._require_page().url.rstrip("/") == f"{self.project_url}/trash"
         results = await self._web_page.run(
             "open_media_tile", {"index": str(index), "project_url": self.project_url}
         )
         media_id = edit_id_from_url(text_result(results, "url"), self.project_magic)
         if media_id is None:
             raise UnexpectedPageStateError("Flow did not open the media editor.")
-        prompt = text_result(results, "prompt")
-        await self._back_to_workspace()
+        prompt = text_result({"prompt": results.get("prompt", "")}, "prompt")
+        await self._back_to_workspace(from_bin=from_bin)
         return media_id, prompt
 
-    async def _back_to_workspace(self) -> None:
+    async def _back_to_workspace(self, *, from_bin: bool = False) -> None:
         """Go back from a page opened from the workspace, without reloading it.
 
         A reload can reorder the grid (the live grid keeps submission order),
@@ -1441,11 +1549,53 @@ class GoogleFlowProject(SitePage):
         """
         page = self._require_page()
         await page.go_back(wait_until="commit")
+        if from_bin:
+            if page.url.rstrip("/") != f"{self.project_url}/trash":
+                raise UnexpectedPageStateError("Going back did not return to the bin.")
+            return
         if not is_project_url(page.url, self.project_magic):
             raise UnexpectedPageStateError(
                 "Going back did not return to the project workspace."
             )
         await self._web_page.run("wait_for_workspace")
+
+    async def _find_media_tile(self, media_id: MediaId) -> int | None:
+        """Resolve an opaque video tile using its editor identity, in either grid."""
+        editor_id = self._media_editor_ids.get(media_id, media_id)
+        for index, tile in enumerate(await self._snapshot_media()):
+            if tile.item.media_id in {media_id, editor_id}:
+                return index
+            if tile.item.kind == "video" and not tile.item.pending:
+                candidate_id, _ = await self._open_tile(index)
+                if candidate_id == editor_id:
+                    return index
+        return None
+
+    async def _run_media_menu_item(
+        self, media_id: MediaId, item: MediaMenuItem
+    ) -> None:
+        params = {"media_id": media_id, "item": _menu_item_pattern(item)}
+        try:
+            await self._web_page.run("run_media_menu_item", params)
+        except ActionFailed:
+            index = await self._find_media_tile(media_id)
+            if index is None:
+                raise
+            tile = self._require_page().locator(
+                fill(SELECTORS["media_tile_at"], {"index": str(index)})
+            )
+            element = await tile.element_handle()
+            if element is None:
+                raise UnexpectedPageStateError("The media tile disappeared.")
+            try:
+                await self._web_page.run(
+                    "run_media_menu_item_at",
+                    {"index": str(index), "item": params["item"]},
+                )
+                if item == "Move to trash":
+                    await element.wait_for_element_state("hidden")
+            finally:
+                await element.dispose()
 
     async def _run_media_menu_action(
         self, media_id: MediaId, item_label: MediaMenuItem, action: MediaAction
@@ -1453,10 +1603,7 @@ class GoogleFlowProject(SitePage):
         """Choose ``item_label`` in a grid tile's context menu."""
         try:
             await self._ensure_on_workspace()
-            await self._web_page.run(
-                "run_media_menu_item",
-                {"media_id": media_id, "item": _menu_item_pattern(item_label)},
-            )
+            await self._run_media_menu_item(media_id, item_label)
         except (PlaywrightError, UnexpectedPageStateError) as error:
             failure = MediaActionError(media_id, action)
             await self._note_flow_message(failure)
@@ -1694,11 +1841,10 @@ def _job_for_prompt(
     """The job still missing outputs whose prompt Flow shows for a tile."""
     shown = " ".join(shown_prompt.split())
     waiting = [job for job, found in outputs.items() if len(found) < job.outputs]
-    # An exact match first; the editor may add text around the prompt.
-    return next(
-        (job for job in waiting if " ".join(job.prompt.split()) == shown),
-        next((job for job in waiting if " ".join(job.prompt.split()) in shown), None),
-    )
+    matches = [job for job in waiting if " ".join(job.prompt.split()) == shown]
+    if len(matches) > 1:
+        raise GenerationError("Flow returned an ambiguous prompt for concurrent jobs.")
+    return matches[0] if matches else None
 
 
 # Other labels of media menu entries. Flow follows the account and browser

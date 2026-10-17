@@ -1,0 +1,8 @@
+name: run_media_menu_item_at
+selectors_name: googleflow
+params: [index, item]
+steps:
+  - click: {target: media_tile_at, button: right}
+  - wait_for: media_menu
+  - click: media_menu_item
+  - wait_for: {target: media_menu, state: hidden}

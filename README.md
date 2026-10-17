@@ -1,12 +1,12 @@
 # generative-ai
 
-Async Playwright automation for [Google Flow](https://flow.google.com/).
+Async [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) automation for [Google Flow](https://flow.google.com/).
 
 ## Install
 
 ```bash
 uv add git+https://github.com/ThanapatFungpharit/generative-ai
-uv run playwright install chromium
+# CloakBrowser downloads its patched Chromium on first launch.
 ```
 
 `GoogleFlowProject` and the generation models are also re-exported from the
@@ -17,28 +17,25 @@ top-level `generative_ai` package.
 ```python
 from pathlib import Path
 
-from playwright.async_api import async_playwright
+from cloakbrowser import launch_persistent_context_async
 
 from generative_ai.googleflow import GoogleFlowProject
 
 
 async def main() -> None:
-    async with async_playwright() as playwright:
-        # A persistent profile keeps the Google sign-in between runs.
-        context = await playwright.chromium.launch_persistent_context(
-            "google-profile", headless=False
-        )
-        project = await GoogleFlowProject.new(context)
+    # A persistent profile keeps the Google sign-in between runs.
+    context = await launch_persistent_context_async("google-profile", headless=False)
+    project = await GoogleFlowProject.new(context)
 
-        uploads = await project.upload_media([Path("cat.png")])
-        images = await project.generate_image(
-            "a cat astronaut", model="Nano Banana 2.1", aspect_ratio="1:1", outputs=1
-        )
-        videos = await project.generate_video(
-            "the cat floats through the station", start_frame=images[0]
-        )
-        await project.download_media(videos[0], Path("downloads"))
-        await project.close()
+    uploads = await project.upload_media([Path("cat.png")])
+    images = await project.generate_image(
+        "a cat astronaut", model="Nano Banana 2.1", aspect_ratio="1:1", outputs=1
+    )
+    videos = await project.generate_video(
+        "the cat floats through the station", start_frame=images[0]
+    )
+    await project.download_media(videos[0], Path("downloads"))
+    await project.close()
 ```
 
 ## `GoogleFlowProject`
@@ -50,10 +47,17 @@ async def main() -> None:
 | Media | `upload_media`, `list_media`, `download_media`, `reuse_prompt`, `toggle_favourite`, `set_project_cover`, `move_to_bin`, `restore_from_bin` |
 | Scenes | `create_scene` |
 
+> **Agent mode:** `set_agent_mode(True)` makes Flow remove the generation
+> settings, and the change carries over to other projects, leaving them in an
+> unexpected state. It emits a `UserWarning`; turn it off and re-apply settings
+> afterwards. `generate_image` and `generate_video` already switch it off.
+
 Media are addressed by Flow's media ID (the tile's `data-media-id`), which
 `upload_media`, `generate_*` and `list_media` return. Video tiles expose no
 ID once rendered, so `download_media` falls back to the media's editor page,
 which also accepts the IDs a video's thumbnail and editor URL carry.
+The project instance retains the relationship between those two IDs, so its
+media actions can still find a video after Flow replaces its thumbnail URL.
 
 Generations can run concurrently in one project: `start_image` and
 `start_video` return a `GenerationJob` as soon as Flow accepts it, and
@@ -65,6 +69,12 @@ jobs = [await project.start_video(prompt, start_frame=frame) for prompt, frame i
 videos = await project.wait_for_generations(jobs)
 ```
 
+Collection compares media identities and verifies each output's prompt, so
+uploads and a fixed-size virtualized grid do not change job attribution.
+Collect a job before submitting another with the same prompt and output kind;
+Flow does not expose enough information to distinguish those concurrent jobs.
+Repeated jobs in one `wait_for_generations` call are returned once.
+
 Model, aspect-ratio and
 download-quality values are Flow's own labels; the options depend on the mode
 and the account, and an unavailable value raises an error listing what Flow
@@ -74,6 +84,16 @@ Selectors and linear UI flows live in `src/generative_ai/googleflow/manifests/`.
 Every page's viewport is locked to 1280×720, whatever the context or window
 size, because Flow's layout shifts with the viewport (narrower ones switch to a
 mobile layout with different controls).
+
+Each Flow page also enables Chromium focus emulation before navigation. This
+keeps visibility- and focus-dependent JavaScript active while other project
+tabs are being used, including projects opened concurrently with
+`asyncio.gather`. It uses one page-scoped DevTools session, retained until the
+page closes, without a polling loop, tab switching, or extra browser processes.
+Normal Playwright launches already apply this emulation; attaching it here
+also covers Chromium contexts connected with `no_defaults=True`. Flow contexts
+must support `new_cdp_session`; setup errors propagate through the project
+constructor and its page cleanup instead of leaving a partially configured tab.
 
 ## Joining clips into one video
 
@@ -103,10 +123,9 @@ uv run python -m tests.live.sign_in   # once: sign in to Google in ./google-prof
 uv run pytest --live
 ```
 
-`--flow-profile` (or `GOOGLE_FLOW_PROFILE`) picks another profile. A profile
-made by installed Google Chrome needs `--flow-channel chrome` (or
-`GOOGLE_FLOW_CHANNEL=chrome`), because bundled Chromium cannot decrypt Chrome's
-cookies and Flow then sees no sign-in.
+`--flow-profile` (or `GOOGLE_FLOW_PROFILE`) picks another profile. Sign in with
+`tests.live.sign_in` (CloakBrowser), since Google rejects sign-in in stock
+Playwright Chromium.
 
 ## Adding a site
 
@@ -124,7 +143,8 @@ reference implementation. A new site `foo` needs:
    ```
 
    `Site.attach(page)` sets timeouts and locks the viewport, then loads every
-   manifest; `get_site("foo")` finds it by name.
+   manifest; `get_site("foo")` finds it by name. Set `keep_active=True` for
+   Chromium sites that require focus emulation during parallel execution.
 3. `foo/exceptions.py` — errors deriving from `SiteError`.
 4. `foo/page.py` — a `SitePage` subclass. Implement `_closed_error`, decorate
    public operations with `@page_required` (serialises operations and requires

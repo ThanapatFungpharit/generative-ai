@@ -7,6 +7,8 @@ tests act on the media ID the upload test stores. Spends no credits.
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
@@ -110,21 +112,48 @@ async def test_create_scene(shared_project: GoogleFlowProject) -> None:
     assert page_url == shared_project.project_url
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+async def test_uploaded_video_survives_reload_and_bin(
+    shared_project: GoogleFlowProject, tmp_path: Path
+) -> None:
+    video = tmp_path / "sample.mp4"
+    await asyncio.to_thread(
+        subprocess.run,
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=red:s=320x180:r=24:d=1",
+            "-pix_fmt", "yuv420p", str(video),
+        ],
+        check=True,
+    )  # fmt: skip
+    media_id = (await shared_project.upload_media([video]))[video]
+    await shared_project._return_to_workspace()
+
+    await _bin_and_restore(shared_project, media_id)
+
+
 async def _bin_and_restore(project: GoogleFlowProject, media_id: MediaId) -> None:
     await project.move_to_bin(media_id)
-    assert media_id not in await _listed_ids(project)
+    assert not await _contains_media(project, media_id)
 
     await project.restore_from_bin(media_id)
 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _REAPPEAR_TIMEOUT_SECONDS
-    while media_id not in await _listed_ids(project):
+    while not await _contains_media(project, media_id):
         if loop.time() >= deadline:
             pytest.fail(f"Restored media {media_id} did not reappear in the grid.")
         await asyncio.sleep(5)
         # The grid does not pick the restored item up until it is reloaded.
         page = cast("Page", project._require_page())
         await page.reload()
+
+
+async def _contains_media(project: GoogleFlowProject, media_id: MediaId) -> bool:
+    if media_id in await _listed_ids(project):
+        return True
+    # Reloaded video tiles have opaque thumbnails and expose no content ID.
+    return await project._find_media_tile(media_id) is not None
 
 
 async def _listed_ids(project: GoogleFlowProject) -> set[MediaId | None]:

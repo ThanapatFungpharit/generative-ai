@@ -5,5 +5,8 @@ steps:
   - click: media_tile_at
   - wait_for_url: "{project_url}/edit/*"
   - get_url: url
-  - wait_for: editor_prompt
-  - get_text: {target: editor_prompt, exclude: icons, as: prompt}
+  # Uploaded media can have no prompt. It must not match a generation job.
+  - if:
+      visible: {target: editor_prompt, timeout: 3000}
+      then:
+        - get_text: {target: editor_prompt, exclude: icons, as: prompt}
