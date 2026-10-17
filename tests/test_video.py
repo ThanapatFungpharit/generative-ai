@@ -64,6 +64,43 @@ async def test_failure_keeps_the_previous_output(tmp_path: Path) -> None:
     assert [path.name for path in tmp_path.iterdir()] == ["out.mp4"]
 
 
+@needs_ffmpeg
+async def test_encode_failure_preserves_a_preexisting_partial(
+    clip: Path, tmp_path: Path
+) -> None:
+    existing = tmp_path / "out.partial.mp4"
+    existing.write_bytes(b"user data")
+    output = tmp_path / "out.mp4"
+    output.write_bytes(b"previous output")
+
+    with pytest.raises(VideoAssemblyError):
+        # yuv420p cannot encode these odd dimensions. Fail after probing and
+        # creating our temporary file, so this exercises encode cleanup.
+        await assemble_video(
+            [Clip(clip)], output, clip_duration=1, width=321, height=181
+        )
+
+    assert existing.read_bytes() == b"user data"
+    assert output.read_bytes() == b"previous output"
+    assert {path.name for path in tmp_path.iterdir()} == {"out.partial.mp4", "out.mp4"}
+
+
+@needs_ffmpeg
+async def test_concurrent_assemblies_do_not_share_temporary_files(
+    clip: Path, tmp_path: Path
+) -> None:
+    output = tmp_path / "out.mp4"
+    results = await asyncio.gather(
+        *(
+            assemble_video([Clip(clip)], output, clip_duration=1, width=320, height=180)
+            for _ in range(2)
+        )
+    )
+    assert results == [output, output]
+    assert abs(await video.probe_duration(output) - 1) < 0.1
+    assert [path.name for path in tmp_path.iterdir()] == ["out.mp4"]
+
+
 async def test_cancelling_a_run_kills_the_process(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

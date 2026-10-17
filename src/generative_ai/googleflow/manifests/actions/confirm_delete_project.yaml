@@ -1,6 +1,8 @@
 name: confirm_delete_project
 selectors_name: googleflow
-params: [project_path, project_url]
 steps:
   - click: confirm_delete_project_button
-  - wait_for: {target: project_card, state: detached}
+  - wait_for: {target: delete_project_dialog, state: hidden}
+  # The dialog closes before the server finishes deleting. Navigating away
+  # now can abort that request. Flow returns to its project list on success.
+  - wait_for: new_project_button

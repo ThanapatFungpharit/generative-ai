@@ -1,9 +1,7 @@
 name: open_delete_project_dialog
 selectors_name: googleflow
-params: [base_url, project_path, project_url]
 steps:
-  - goto: "{base_url}"
-  - wait_for: project_card
-  - wait_for: project_delete_button
-  - click: project_delete_button
+  - click: more_options_button
+  - wait_for: delete_project_menu_item
+  - click: delete_project_menu_item
   - wait_for: confirm_delete_project_button

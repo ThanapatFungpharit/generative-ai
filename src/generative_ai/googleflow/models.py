@@ -82,7 +82,8 @@ class GenerationJob:
     """A generation submitted with ``start_image`` or ``start_video``.
 
     Pass it to ``GoogleFlowProject.wait_for_generations`` to get its media
-    IDs. Jobs compare by identity, so two jobs with one prompt stay distinct.
+    IDs. Jobs compare by identity. Collect a job before submitting another
+    with the same prompt and output kind: Flow cannot disambiguate them.
     """
 
     prompt: PromptText

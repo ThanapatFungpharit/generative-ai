@@ -1,18 +1,21 @@
 name: googleflow
 selectors:
-  # Projects page. A card is found by the link to its project.
+  # Projects page
   new_project_button: .new-project-button
-  project_card: '.project-card:has(a[href="{project_path:string}"], a[href="{project_url:string}"])'
-  project_title_input: '.project-card:has(a[href="{project_path:string}"], a[href="{project_url:string}"]) .title-input'
-  project_edit_title_button: '.project-card:has(a[href="{project_path:string}"], a[href="{project_url:string}"]) .project-title-label button'
-  project_title_named: '.project-card:has(a[href="{project_path:string}"], a[href="{project_url:string}"]) .project-title-label >> text="{new_name:string}"'
-  project_delete_button: '.project-card:has(a[href="{project_path:string}"], a[href="{project_url:string}"]) button[aria-label="Delete project"]'
-  confirm_delete_project_button: "flow-confirmation-dialog mat-dialog-actions button:has(span:text-is('Delete project'))"
 
   # Workspace header
   header_add_media_button: "button[aria-label='Add media menu']"
   header_upload_menu_item: ".cdk-overlay-container [role='menuitem']:has-text('Upload')"
   new_scene_menu_item: ".cdk-overlay-container [role='menuitem']:has-text('New scene')"
+  # The project name is an input that gains .editing while it is edited; the
+  # visually hidden heading beside it shows the saved name.
+  project_name_input: ".header-title flow-editable-text input.editable-text-input"
+  project_name_input_editing: ".header-title flow-editable-text input.editable-text-input.editing"
+  project_name_heading: '.header-title .header-title-heading:text-is("{new_name:string}")'
+  more_options_button: .more-options-button
+  delete_project_menu_item: ".cdk-overlay-container flow-menu-item.delete-button [role='menuitem']"
+  delete_project_dialog: flow-confirmation-dialog
+  confirm_delete_project_button: "flow-confirmation-dialog mat-dialog-actions button:has(span:text-is('Delete project'))"
 
   # Prompt box. Video Frames mode renders no ingredient trigger, so the
   # editor is what marks a loaded workspace.
@@ -53,9 +56,10 @@ selectors:
   # icon (e.g. on 360p) adds its tooltip text to the name.
   setting_option: 'flow-prompt-box-settings flow-toggles[aria-label="{group:string}"] button[role=radio]:has(.toggle-text:text-is("{label:string}")) >> nth=0'
   checked_setting_option: 'flow-prompt-box-settings flow-toggles[aria-label="{group:string}"] button[role=radio][aria-checked=true]:has(.toggle-text:text-is("{label:string}")) >> nth=0'
-  model_menu: ".cdk-overlay-container [role='menu'] >> nth=-1"
-  model_options: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem"
-  model_option: '.cdk-overlay-container [role=''menu''] >> nth=-1 >> role=menuitem[name=/(?:^|\s){model:regex}$/] >> nth=0'
+  # Keep targeting the family menu when hovering opens another overlay.
+  model_menu: ".cdk-overlay-container [role='menu'] >> nth=0"
+  model_options: ".cdk-overlay-container [role='menu'] >> nth=0 >> role=menuitem"
+  model_option: '.cdk-overlay-container [role=''menu''] >> nth=0 >> role=menuitem[name=/(?:^|\s){model:regex}$/] >> nth=0'
 
   # Asset picker popover. Its thumbnails carry no media ID, so media are
   # added to the prompt from their grid tile's menu instead.
@@ -67,9 +71,10 @@ selectors:
   # A video tile has no data-media-id; until a reload swaps it for an opaque
   # URL, its thumbnail's flow-content URL carries the ID list_media reports.
   media_tile_by_id: 'flow-grid-tile-container:has([data-media-id="{media_id:string}"], img[src^="https://flow-content.google/"][src*="/{media_id:string}?"])'
-  media_tile_restore_button: 'flow-grid-tile-container:has([data-media-id="{media_id:string}"]) >> role=button[name="Restore"s]'
+  media_tile_restore_button: 'flow-grid-tile-container:has([data-media-id="{media_id:string}"], img[src^="https://flow-content.google/"][src*="/{media_id:string}?"]) >> role=button[name="Restore"s]'
 
   media_tile_at: "flow-grid-tile-container >> nth={index:string}"
+  media_tile_restore_at: 'flow-grid-tile-container >> nth={index:string} >> role=button[name="Restore"s]'
 
   # Media editor at {project_url}/edit/{id}. It accepts a tile's data-media-id,
   # the ID in its flow-content URLs, and the ID a tile click navigates to.
@@ -79,15 +84,6 @@ selectors:
   editor_enabled_download_button: "flow-editor-header button[aria-label='Download media']:not([disabled])"
   # Present only for media with a choice of sizes; uploads download at once.
   editor_download_menu_trigger: "flow-editor-header button[aria-label='Download media'][aria-haspopup='menu']"
-  # The menu's first entry: entries render a moment after the menu shows.
-  editor_download_menu_item: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem >> nth=0"
-  editor_download_options: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem[disabled=false]"
-  editor_download_option: '.cdk-overlay-container [role=''menu''] >> nth=-1 >> role=menuitem[name=/^{quality:regex}\b/][disabled=false] >> nth=0'
-  editor_upscaled_download_option: '.cdk-overlay-container [role=''menu''] >> nth=-1 >> role=menuitem[name=/^{quality:regex}\b.*Upscaled/][disabled=false] >> nth=0'
-  # Videos list "270p Animated GIF" first and paid upscales last.
-  editor_original_download_option: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem[name=/Original size/][disabled=false] >> nth=0"
-  editor_first_download_option: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem[disabled=false] >> nth=0"
-
   # A tile's context menu (it mirrors More options) and its Download submenu.
   # {item} is a regex alternation of an entry's labels, which differ between
   # English locales (Favorite|Favourite), each escaped by the caller.
@@ -96,12 +92,14 @@ selectors:
   media_menu_download: '.cdk-overlay-container [role=''menu''] >> nth=0 >> role=menuitem[name=/(?:^|\s)Download$/]'
   # Present only for media with a choice of sizes; uploads download at once.
   media_menu_download_submenu_trigger: ".cdk-overlay-container [role='menu'] >> nth=0 >> [role='menuitem'][aria-haspopup='menu']:has-text('Download')"
-  download_submenu_item: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem >> nth=0"
-  download_options: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem[disabled=false]"
-  original_download_option: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem[name=/Original size/][disabled=false] >> nth=0"
-  first_download_option: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem[disabled=false] >> nth=0"
-  download_option: '.cdk-overlay-container [role=''menu''] >> nth=1 >> role=menuitem[name=/^{quality:regex}\b/][disabled=false] >> nth=0'
-  upscaled_download_option: '.cdk-overlay-container [role=''menu''] >> nth=1 >> role=menuitem[name=/^{quality:regex}\b.*Upscaled/][disabled=false] >> nth=0'
+  # Quality selection is shared by the tile submenu (1) and editor menu (-1).
+  download_menu_item: ".cdk-overlay-container [role='menu'] >> nth={menu_index} >> role=menuitem >> nth=0"
+  download_options: ".cdk-overlay-container [role='menu'] >> nth={menu_index} >> role=menuitem[disabled=false]"
+  # Videos list "270p Animated GIF" first and paid upscales last.
+  original_download_option: ".cdk-overlay-container [role='menu'] >> nth={menu_index} >> role=menuitem[name=/Original size/][disabled=false] >> nth=0"
+  first_download_option: ".cdk-overlay-container [role='menu'] >> nth={menu_index} >> role=menuitem[disabled=false] >> nth=0"
+  download_option: '.cdk-overlay-container [role=''menu''] >> nth={menu_index} >> role=menuitem[name=/^{quality:regex}\b/][disabled=false] >> nth=0'
+  upscaled_download_option: '.cdk-overlay-container [role=''menu''] >> nth={menu_index} >> role=menuitem[name=/^{quality:regex}\b.*Upscaled/][disabled=false] >> nth=0'
 
   # An upscaled download starts once Flow has upscaled the media; a failed
   # upscale shows only a snackbar, often within a second.

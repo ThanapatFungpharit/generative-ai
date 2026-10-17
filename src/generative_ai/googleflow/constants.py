@@ -64,6 +64,7 @@ SITE: Final = register_site(
         manifests_dir=_MANIFESTS_DIR,
         navigation_timeout_ms=CONFIGS.NAVIGATION_TIMEOUT_MS,
         viewport={"width": CONFIGS.VIEWPORT_WIDTH, "height": CONFIGS.VIEWPORT_HEIGHT},
+        keep_active=True,
     )
 )
 SELECTORS: Final = SITE.load_selectors()

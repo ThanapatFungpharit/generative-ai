@@ -9,12 +9,12 @@ from __future__ import annotations
 import struct
 import warnings
 import zlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 import pytest_asyncio
+from cloakbrowser import launch_persistent_context_async
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import async_playwright
 
 from generative_ai.googleflow import GoogleFlowError, GoogleFlowProject
 from generative_ai.googleflow.constants import SELECTORS, URLS
@@ -31,24 +31,24 @@ _SIGN_IN_TIMEOUT_MS = 20_000.0
 @pytest_asyncio.fixture(scope="session")
 async def context(pytestconfig: pytest.Config) -> AsyncIterator[BrowserContext]:
     """A persistent Chromium context whose profile is signed in to Flow."""
-    profile: Path = pytestconfig.getoption("flow_profile")
+    profile = cast("Path", pytestconfig.getoption("flow_profile"))
     if not profile.is_dir():
         pytest.fail(
             f"Browser profile {profile} does not exist. Sign in once with "
             "`uv run python -m tests.live.sign_in`.",
             pytrace=False,
         )
-    async with async_playwright() as playwright:
-        context = await playwright.chromium.launch_persistent_context(
-            profile,
-            channel=pytestconfig.getoption("flow_channel"),
-            headless=pytestconfig.getoption("headless"),
-        )
-        try:
-            await _require_signed_in(context, profile)
-            yield context
-        finally:
-            await context.close()
+    context = cast(
+        "BrowserContext",
+        await launch_persistent_context_async(
+            profile, headless=pytestconfig.getoption("headless")
+        ),
+    )
+    try:
+        await _require_signed_in(context, profile)
+        yield context
+    finally:
+        await context.close()
 
 
 async def _require_signed_in(context: BrowserContext, profile: Path) -> None:
@@ -77,8 +77,11 @@ async def discard(project: GoogleFlowProject) -> None:
     try:
         await project.delete()
     except GoogleFlowError as error:
+        details = "\n".join(getattr(error, "__notes__", ()))
+        if error.__cause__ is not None:
+            details += f"\nCaused by: {error.__cause__}"
         warnings.warn(
-            f"Could not delete test project {project.project_url}: {error}",
+            f"Could not delete test project {project.project_url}: {error}\n{details}",
             stacklevel=1,
         )
 

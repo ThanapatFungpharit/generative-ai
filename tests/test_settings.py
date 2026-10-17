@@ -119,3 +119,39 @@ async def test_apply_raises_when_flow_keeps_another_value() -> None:
     with pytest.raises(GenerationSettingsError, match=r"aspect ratio '1:1'"):
         await project._apply_settings(_IMAGE_1_1)
     assert project.rounds == CONFIGS.SETTINGS_APPLY_ATTEMPTS
+
+
+async def test_model_selected_before_model_dependent_options() -> None:
+    class Web:
+        async def run(self, *args: object) -> dict[str, object]:
+            return {}
+
+    class Project(GoogleFlowProject):
+        def __init__(self) -> None:
+            super().__init__(
+                "magic", cast("BrowserPage", object()), cast("WebPage", Web())
+            )
+            self.model = "old-model"
+            self.ratio = "16:9"
+
+        @override
+        async def _select_model(self, model: str) -> None:
+            self.model = model
+
+        @override
+        async def _select_setting(self, field: str, label: str) -> None:
+            if field == "Aspect ratio":
+                if self.model != "new-model":
+                    raise GenerationSettingsError("Old model does not offer 1:1")
+                self.ratio = label
+
+        @override
+        async def _close_overlays(self) -> None:
+            pass
+
+    project = Project()
+    await project._select_settings(
+        GenerationSettings(model="new-model", aspect_ratio="1:1")
+    )
+    assert project.model == "new-model"
+    assert project.ratio == "1:1"

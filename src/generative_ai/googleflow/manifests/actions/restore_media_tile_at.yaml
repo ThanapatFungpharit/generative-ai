@@ -1,0 +1,6 @@
+name: restore_media_tile_at
+selectors_name: googleflow
+params: index
+steps:
+  - hover: media_tile_at
+  - click: media_tile_restore_at

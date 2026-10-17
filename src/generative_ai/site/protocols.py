@@ -9,17 +9,29 @@ the calls this package makes are listed; return values it ignores are typed
 from __future__ import annotations
 
 from re import Pattern
-from typing import Literal, Protocol, Self, TypedDict, override
+from typing import TYPE_CHECKING, Literal, Protocol, Self, TypedDict, override
 
 from web_page import Locator, Page
 from web_page.types import Milliseconds
 
 from generative_ai.site.types import Pixels, RawJson
 
+if TYPE_CHECKING:
+    from playwright.async_api import Page as ChromiumPage
+
 
 class ViewportSize(TypedDict):
     width: Pixels
     height: Pixels
+
+
+class BrowserElement(Protocol):
+    """A specific DOM node, retained while grid indexes can change."""
+
+    async def wait_for_element_state(
+        self, state: Literal["hidden"], *, timeout: Milliseconds | None = ...
+    ) -> object: ...
+    async def dispose(self) -> object: ...
 
 
 class BrowserLocator(Locator, Protocol):
@@ -33,9 +45,13 @@ class BrowserLocator(Locator, Protocol):
         visible: bool | None = ...,
     ) -> Self: ...
     async def is_disabled(self) -> bool: ...
+    async def element_handle(self) -> BrowserElement | None: ...
 
 
 class BrowserPage(Page, Protocol):
+    @property
+    def context(self) -> BrowserContext: ...
+
     @property
     def viewport_size(self) -> ViewportSize | None: ...
 
@@ -52,5 +68,13 @@ class BrowserPage(Page, Protocol):
     async def set_viewport_size(self, viewport_size: ViewportSize) -> object: ...
 
 
+class BrowserSession(Protocol):
+    """A page-scoped Chromium DevTools session, released when its page closes."""
+
+    async def send(self, method: str, params: dict[str, object]) -> object: ...
+    async def detach(self) -> object: ...
+
+
 class BrowserContext(Protocol):
     async def new_page(self) -> BrowserPage: ...
+    async def new_cdp_session(self, page: ChromiumPage) -> BrowserSession: ...

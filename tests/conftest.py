@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 DEFAULT_PROFILE = Path(os.environ.get("GOOGLE_FLOW_PROFILE", "google-profile"))
-DEFAULT_CHANNEL = os.environ.get("GOOGLE_FLOW_CHANNEL")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -32,15 +31,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--flow-profile",
         type=Path,
         default=DEFAULT_PROFILE,
-        help="Chromium profile directory signed in to Google "
+        help="CloakBrowser profile directory signed in to Google "
         "(default: $GOOGLE_FLOW_PROFILE or ./google-profile).",
-    )
-    group.addoption(
-        "--flow-channel",
-        default=DEFAULT_CHANNEL,
-        help="Browser channel, e.g. 'chrome' for a profile made by Google "
-        "Chrome, whose cookies bundled Chromium cannot decrypt "
-        "(default: $GOOGLE_FLOW_CHANNEL or bundled Chromium).",
     )
     group.addoption(
         "--headless",
