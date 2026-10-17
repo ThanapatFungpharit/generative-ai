@@ -1,6 +1,7 @@
 name: read_generation_settings
 selectors_name: googleflow
 steps:
+  - run: open_generation_settings
   # Each group yields at most one label; a group Flow hides yields none.
   - get_all_texts: {target: checked_mode, exclude: icons, as: mode}
   - get_all_texts: {target: checked_video_type, exclude: icons, as: video_input}

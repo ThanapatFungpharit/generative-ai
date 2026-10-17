@@ -79,15 +79,6 @@ selectors:
   editor_enabled_download_button: "flow-editor-header button[aria-label='Download media']:not([disabled])"
   # Present only for media with a choice of sizes; uploads download at once.
   editor_download_menu_trigger: "flow-editor-header button[aria-label='Download media'][aria-haspopup='menu']"
-  # The menu's first entry: entries render a moment after the menu shows.
-  editor_download_menu_item: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem >> nth=0"
-  editor_download_options: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem[disabled=false]"
-  editor_download_option: '.cdk-overlay-container [role=''menu''] >> nth=-1 >> role=menuitem[name=/^{quality:regex}\b/][disabled=false] >> nth=0'
-  editor_upscaled_download_option: '.cdk-overlay-container [role=''menu''] >> nth=-1 >> role=menuitem[name=/^{quality:regex}\b.*Upscaled/][disabled=false] >> nth=0'
-  # Videos list "270p Animated GIF" first and paid upscales last.
-  editor_original_download_option: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem[name=/Original size/][disabled=false] >> nth=0"
-  editor_first_download_option: ".cdk-overlay-container [role='menu'] >> nth=-1 >> role=menuitem[disabled=false] >> nth=0"
-
   # A tile's context menu (it mirrors More options) and its Download submenu.
   # {item} is a regex alternation of an entry's labels, which differ between
   # English locales (Favorite|Favourite), each escaped by the caller.
@@ -96,12 +87,14 @@ selectors:
   media_menu_download: '.cdk-overlay-container [role=''menu''] >> nth=0 >> role=menuitem[name=/(?:^|\s)Download$/]'
   # Present only for media with a choice of sizes; uploads download at once.
   media_menu_download_submenu_trigger: ".cdk-overlay-container [role='menu'] >> nth=0 >> [role='menuitem'][aria-haspopup='menu']:has-text('Download')"
-  download_submenu_item: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem >> nth=0"
-  download_options: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem[disabled=false]"
-  original_download_option: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem[name=/Original size/][disabled=false] >> nth=0"
-  first_download_option: ".cdk-overlay-container [role='menu'] >> nth=1 >> role=menuitem[disabled=false] >> nth=0"
-  download_option: '.cdk-overlay-container [role=''menu''] >> nth=1 >> role=menuitem[name=/^{quality:regex}\b/][disabled=false] >> nth=0'
-  upscaled_download_option: '.cdk-overlay-container [role=''menu''] >> nth=1 >> role=menuitem[name=/^{quality:regex}\b.*Upscaled/][disabled=false] >> nth=0'
+  # Quality selection is shared by the tile submenu (1) and editor menu (-1).
+  download_menu_item: ".cdk-overlay-container [role='menu'] >> nth={menu_index} >> role=menuitem >> nth=0"
+  download_options: ".cdk-overlay-container [role='menu'] >> nth={menu_index} >> role=menuitem[disabled=false]"
+  # Videos list "270p Animated GIF" first and paid upscales last.
+  original_download_option: ".cdk-overlay-container [role='menu'] >> nth={menu_index} >> role=menuitem[name=/Original size/][disabled=false] >> nth=0"
+  first_download_option: ".cdk-overlay-container [role='menu'] >> nth={menu_index} >> role=menuitem[disabled=false] >> nth=0"
+  download_option: '.cdk-overlay-container [role=''menu''] >> nth={menu_index} >> role=menuitem[name=/^{quality:regex}\b/][disabled=false] >> nth=0'
+  upscaled_download_option: '.cdk-overlay-container [role=''menu''] >> nth={menu_index} >> role=menuitem[name=/^{quality:regex}\b.*Upscaled/][disabled=false] >> nth=0'
 
   # An upscaled download starts once Flow has upscaled the media; a failed
   # upscale shows only a snackbar, often within a second.

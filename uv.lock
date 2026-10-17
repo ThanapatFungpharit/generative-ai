@@ -294,7 +294,7 @@ wheels = [
 [[package]]
 name = "web-page"
 version = "0.1.0"
-source = { git = "https://github.com/ThanapatFungpharit/web-page?rev=main#f2d8fcd2152c8af933b11291f8018bcabef5822a" }
+source = { git = "https://github.com/ThanapatFungpharit/web-page?rev=main#cb596a5863ec1c818f965b0e7d627568bbb3774c" }
 dependencies = [
     { name = "aiofiles" },
     { name = "pyyaml" },

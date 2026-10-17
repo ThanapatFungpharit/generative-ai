@@ -1148,7 +1148,6 @@ class GoogleFlowProject(SitePage):
 
         The summary also names fixed values whose group the panel hides.
         """
-        await self._web_page.run("open_generation_settings")
         results = await self._web_page.run("read_generation_settings")
         # Some labels carry a badge glyph, e.g. "🍌 Nano Banana Pro".
         model = re.sub(r"^\W+", "", text_result(results, "model"))

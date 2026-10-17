@@ -1,0 +1,40 @@
+name: select_download_quality
+selectors_name: googleflow
+params: [quality, menu_index, subject]
+steps:
+  # Entries render a moment after the menu opens. The grid's submenu is at
+  # index 1; the editor uses the last menu (-1).
+  - wait_for: download_menu_item
+  # An empty quality means the original size, or else the first enabled entry.
+  - if:
+      param: quality
+      then:
+        - if:
+            exists: download_option
+            then:
+              - if:
+                  exists: upscaled_download_option
+                  then:
+                    # Do not mistake an earlier upscale's snackbar for this one.
+                    - wait_for: {target: upscale_outcome_message, state: hidden, timeout: 10000, optional: true}
+                    - click: download_option
+                    # Flow upscales first; a failure shows a snackbar, not a download.
+                    - wait_for: {target: upscaling_message, timeout: 5000, optional: true}
+                    - wait_for: {target: upscale_outcome_message, timeout: 110000, optional: true}
+                    - if:
+                        visible: upscale_failed_message
+                        then:
+                          - get_all_texts: {target: visible_snackbars, exclude: snackbar_controls, as: flow_messages}
+                          - fail: "Google Flow could not upscale {subject} to '{quality}'."
+                  else:
+                    - click: download_option
+            else:
+              - get_all_texts: {target: download_options, exclude: icons, as: available}
+              - fail: "Google Flow does not offer download quality '{quality}'."
+      else:
+        - if:
+            exists: original_download_option
+            then:
+              - click: original_download_option
+            else:
+              - click: first_download_option
