@@ -1,0 +1,5 @@
+name: open_chat
+selectors_name: gemini
+params: url
+steps:
+  - goto: "{url}"

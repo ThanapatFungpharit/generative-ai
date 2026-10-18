@@ -1,0 +1,13 @@
+name: open_thinking_menu
+selectors_name: gemini
+steps:
+  - run: open_model_menu
+  # The selected model/account may not expose a configurable thinking level.
+  - if:
+      visible: {target: thinking_trigger, timeout: 1000}
+      then:
+        - if:
+            hidden: thinking_menu
+            then:
+              - click: thinking_trigger
+        - wait_for: thinking_menu

@@ -1,0 +1,5 @@
+name: send_prompt
+selectors_name: gemini
+steps:
+  # Exactly one click: retrying an ambiguous submission can send it twice.
+  - click: send_button

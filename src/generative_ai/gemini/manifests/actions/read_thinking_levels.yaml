@@ -1,0 +1,6 @@
+name: read_thinking_levels
+selectors_name: gemini
+steps:
+  - run: open_thinking_menu
+  - get_all_texts: {target: thinking_labels, as: available}
+  - get_all_texts: {target: selected_thinking_level, as: selected}

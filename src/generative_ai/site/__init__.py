@@ -1,4 +1,4 @@
-"""Site-independent building blocks for browser automation of generative AI tools.
+"""Shared building blocks for AI website interaction.
 
 To support a new website, create a subpackage next to ``googleflow`` with:
 
@@ -6,7 +6,8 @@ To support a new website, create a subpackage next to ``googleflow`` with:
 * a ``Site`` describing them, registered with ``register_site``,
 * a ``SitePage`` subclass exposing the site's operations.
 
-See the README's "Adding a site" section.
+See ``docs/ARCHITECTURE.md`` for project scope and ``docs/DEVELOPMENT.md`` for
+the "Adding a site" guide.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
  [project]
 name = "generative-ai"
 version = "0.1.0"
-description = "Async CloakBrowser automation for Google Flow"
+description = "Async Python tools for interacting with AI websites through browser automation"
 readme = "README.md"
 authors = [
     { name = "ThanapatFungpharit", email = "thanapatsun.pro@gmail.com" }
@@ -43,6 +43,6 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 markers = [
-    "live: drives the real Google Flow website (needs --live and a signed-in profile)",
+    "live: drives a real website (needs --live and a signed-in profile)",
     "credits: spends Google Flow generation credits (needs --live-credits)",
 ]

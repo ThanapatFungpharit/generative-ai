@@ -1,0 +1,9 @@
+name: start_temporary_chat
+selectors_name: gemini
+steps:
+  - if:
+      hidden: temporary_window
+      then:
+        - click: temporary_button
+  - wait_for: temporary_window
+  - wait_for: prompt_editor

@@ -1,0 +1,5 @@
+name: close_model_menu
+selectors_name: gemini
+steps:
+  - press: {target: prompt_editor, key: Escape}
+  - wait_for: {target: model_menu, state: hidden}

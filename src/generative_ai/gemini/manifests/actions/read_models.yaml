@@ -1,0 +1,6 @@
+name: read_models
+selectors_name: gemini
+steps:
+  - run: open_model_menu
+  - get_all_texts: {target: model_labels, as: available}
+  - get_text: {target: selected_model, as: selected}

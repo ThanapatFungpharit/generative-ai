@@ -1,0 +1,8 @@
+name: open_delete_chat_dialog
+selectors_name: gemini
+steps:
+  - press: {target: prompt_editor, key: Escape}
+  - click: conversation_actions
+  - wait_for: delete_menu_item
+  - click: delete_menu_item
+  - wait_for: confirm_delete_button

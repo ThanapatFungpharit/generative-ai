@@ -1,0 +1,15 @@
+name: select_thinking_level
+selectors_name: gemini
+params: level
+steps:
+  - run: open_thinking_menu
+  - if:
+      visible: {target: thinking_option, timeout: 1000}
+      then:
+        # Gemini can position a repeatedly opened submenu outside the viewport.
+        # Its focusable custom menuitems handle Enter reliably (live-verified).
+        - press: {target: thinking_option, key: Enter}
+        - wait_for: {target: thinking_menu, state: hidden}
+      else:
+        - get_all_texts: {target: thinking_labels, as: available}
+        - fail: "Gemini does not offer thinking level '{level}'."

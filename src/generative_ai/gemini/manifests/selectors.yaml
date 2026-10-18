@@ -1,0 +1,40 @@
+name: gemini
+selectors:
+  # Observed on gemini.google.com/app, 2026-10-18. The Quill clipboard is
+  # contenteditable too; restrict to the actual composer textbox.
+  prompt_editor: 'rich-textarea [contenteditable="true"][role="textbox"]'
+  send_button: 'button[aria-label="Send message"]:not([disabled]):not([aria-disabled="true"])'
+  stop_button: 'button[aria-label="Stop response"]'
+  sign_in: 'a[href*="accounts.google.com/ServiceLogin"], a[href*="accounts.google.com/signin"]'
+  # A new turn first renders without an ID; Gemini assigns it asynchronously
+  # after accepting the prompt. Never attribute that transient placeholder.
+  turns: '.conversation-container[id]:not([id=""])'
+  query_lines: 'user-query .query-text-line'
+  response_text: 'model-response message-content .markdown'
+  response_complete: 'model-response .response-footer.complete'
+  busy: 'model-response [aria-busy="true"]'
+  errors: '[role="alert"], mat-snack-bar-container'
+  model_picker: 'button[aria-label^="Open mode picker, currently "]'
+  model_menu: '[data-test-id="gem-mode-menu"][data-visible="true"]'
+  # Upgrade entries open a subscription dialog despite aria-disabled=false.
+  model_options: '[data-test-id="gem-mode-menu"][data-visible="true"] [role="menuitem"][data-mode-id]:not([data-mode-id^="upsell_"]):not([aria-disabled="true"])'
+  model_labels: '[data-test-id="gem-mode-menu"][data-visible="true"] [role="menuitem"][data-mode-id]:not([data-mode-id^="upsell_"]):not([aria-disabled="true"]) .label'
+  selected_model: '[data-test-id="gem-mode-menu"][data-visible="true"] [role="menuitem"][data-mode-id].selected .label'
+  model_option: '[data-test-id="gem-mode-menu"][data-visible="true"] [role="menuitem"][data-mode-id]:not([data-mode-id^="upsell_"]):not([aria-disabled="true"]):has(.label:text-is("{model:string}"))'
+  # The thinking menu is nested inside the model menu. Its ID is generated;
+  # scope to the observed submenu container and visible state instead.
+  thinking_trigger: '[data-test-id="gem-mode-menu"][data-visible="true"] [role="menuitem"][value="thinking_level"]:not([aria-disabled="true"])'
+  thinking_menu: '[data-test-id="gem-mode-menu"][data-visible="true"] .submenu-container > [role="menu"][data-visible="true"]'
+  thinking_labels: '[data-test-id="gem-mode-menu"][data-visible="true"] .submenu-container > [role="menu"][data-visible="true"] > [role="menuitem"]:not([aria-disabled="true"]) .label'
+  selected_thinking_level: '[data-test-id="gem-mode-menu"][data-visible="true"] .submenu-container > [role="menu"][data-visible="true"] > [role="menuitem"].selected .label'
+  thinking_option: '[data-test-id="gem-mode-menu"][data-visible="true"] .submenu-container > [role="menu"][data-visible="true"] > [role="menuitem"]:not([aria-disabled="true"]):has(.label:text-is("{level:string}"))'
+  temporary_button: 'button[aria-label="Temporary chat"]'
+  temporary_window: 'chat-window.is-temporary-chat'
+  # The current-chat control arrives lazily after the conversation loads.
+  # It avoids selecting another chat or depending on virtualized history rows.
+  conversation_actions: 'button[aria-label="Open menu for conversation actions."]'
+  delete_menu_item: '[role="menu"] [role="menuitem"][data-test-id="delete-button"]:visible'
+  delete_dialog: '[role="dialog"][aria-label="Delete chat"]'
+  confirm_delete_button: '[role="dialog"][aria-label="Delete chat"] button:has-text("Delete")'
+  cancel_delete_button: '[role="dialog"][aria-label="Delete chat"] button:has-text("Cancel")'
+  first_turn: '.conversation-container[id]:not([id=""]) >> nth=0'

@@ -41,7 +41,7 @@ async def context(pytestconfig: pytest.Config) -> AsyncIterator[BrowserContext]:
     context = cast(
         "BrowserContext",
         await launch_persistent_context_async(
-            profile, headless=pytestconfig.getoption("headless")
+            profile, headless=pytestconfig.getoption("headless"), humanize=True
         ),
     )
     try:

@@ -1,0 +1,7 @@
+name: fill_prompt
+selectors_name: gemini
+params: prompt
+steps:
+  - fill: {target: prompt_editor, value: "{prompt}"}
+  - get_text: {target: prompt_editor, as: text}
+  - wait_for: send_button

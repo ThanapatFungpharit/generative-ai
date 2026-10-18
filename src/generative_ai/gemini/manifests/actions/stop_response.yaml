@@ -1,0 +1,8 @@
+name: stop_response
+selectors_name: gemini
+steps:
+  - if:
+      visible: stop_button
+      then:
+        - click: stop_button
+  - wait_for: {target: stop_button, state: hidden}

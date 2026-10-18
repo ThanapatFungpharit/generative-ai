@@ -1,0 +1,8 @@
+name: cancel_delete_chat
+selectors_name: gemini
+steps:
+  - if:
+      visible: delete_dialog
+      then:
+        - click: cancel_delete_button
+        - wait_for: {target: delete_dialog, state: hidden}

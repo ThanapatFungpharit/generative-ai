@@ -1,20 +1,112 @@
 # generative-ai
 
-Async [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) automation for [Google Flow](https://flow.google.com/).
+Async Python tools for interacting with AI websites through
+[CloakBrowser](https://github.com/CloakHQ/CloakBrowser), Playwright-compatible
+browser contexts, and YAML workflows.
+
+The project focuses on website interactions: conversations, model and settings
+selection, projects, generated content, and session lifecycle. Each supported
+website exposes its own operations through a Python API built on shared browser
+and workflow infrastructure.
+
+Current integrations are [Google Gemini](https://gemini.google.com/app) for text
+conversations and [Google Flow](https://flow.google.com/) for project and media
+workflows, including image and video generation. Local FFmpeg video assembly
+remains available as an optional utility. See
+[Project direction and architecture](docs/ARCHITECTURE.md) for scope and extension
+guidelines.
+
+| Guide | Contents |
+| --- | --- |
+| [Project direction and architecture](docs/ARCHITECTURE.md) | AI website interaction, shared infrastructure, integration boundaries, and development priorities |
+| [Gemini](docs/GEMINI.md) | Text conversations, model/thinking selection, response recovery, Temporary chats, deletion, and DOM notes |
+| [Google Flow](docs/GOOGLE_FLOW.md) | Projects, verified settings, image/video generation, concurrent jobs, media, and errors |
+| [Development and testing](docs/DEVELOPMENT.md) | Local setup, live-test flags, profiles, checks, and adding a site |
+| [Optional video assembly](docs/VIDEO.md) | Joining clips, captions, output settings, and failure handling |
 
 ## Install
 
+Requires **Python 3.14 or newer** and Git for the Git-based package dependencies.
+
 ```bash
 uv add git+https://github.com/ThanapatFungpharit/generative-ai
-# CloakBrowser downloads its patched Chromium on first launch.
 ```
 
-`GoogleFlowProject` and the generation models are also re-exported from the
-top-level `generative_ai` package.
+CloakBrowser downloads its patched Chromium on first launch. FFmpeg and FFprobe
+are only needed for video assembly. Browser automation requires a Google account
+with access to the selected site and a persistent profile signed in to it.
 
-## Usage
+For a source checkout, install the development dependencies and open a browser
+for sign-in:
+
+```bash
+uv sync
+uv run python -m tests.live.sign_in
+uv run python -m tests.live.sign_in --site gemini
+```
+
+Complete sign-in and wait for the site to load, then close the browser window
+before using that profile again. The defaults are `./google-profile` for Flow
+and `./gemini-profile` for Gemini. The sign-in helper belongs to the source
+checkout; applications using the installed library can sign in through their
+own headed CloakBrowser session.
+
+One persistent profile can be opened by only one browser at a time. Multiple
+project or chat tabs can share one already-open browser context. Each facade
+owns its tab; the application owns and closes the browser context.
+
+## Gemini quickstart
+
+This example sends two prompts in one saved conversation. It consumes Gemini
+text quota and leaves the conversation in the account's history.
 
 ```python
+import asyncio
+
+from cloakbrowser import launch_persistent_context_async
+
+from generative_ai.gemini import GeminiChat
+
+
+async def main() -> None:
+    context = await launch_persistent_context_async(
+        "gemini-profile", headless=False, humanize=True
+    )
+    try:
+        chat = await GeminiChat.new(context)
+        try:
+            print("Available models:", await chat.list_models())
+            print("Current model:", await chat.get_model())
+            response = await chat.send("Explain why the sky is blue.")
+            print(response.text)
+            print(response.chat_url, response.turn_id)
+            follow_up = await chat.send("Summarize that in one sentence.")
+            print(follow_up.text)
+        finally:
+            if not chat.is_closed:
+                await chat.close()
+    finally:
+        await context.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Gemini supports text chat, live model and thinking-level selection, saved-chat
+reopening/deletion, and native Temporary chats on the observed English UI.
+File attachments, image/music generation, and Canvas are outside its public
+API. See the [Gemini guide](docs/GEMINI.md) for timeout recovery and lifecycle
+examples.
+
+## Google Flow quickstart
+
+This example creates a saved project, generates an image, and downloads it.
+Generation uses the account's credits or quota. Model labels depend on the
+account; replace the example label if Flow offers different options.
+
+```python
+import asyncio
 from pathlib import Path
 
 from cloakbrowser import launch_persistent_context_async
@@ -23,132 +115,55 @@ from generative_ai.googleflow import GoogleFlowProject
 
 
 async def main() -> None:
-    # A persistent profile keeps the Google sign-in between runs.
-    context = await launch_persistent_context_async("google-profile", headless=False)
-    project = await GoogleFlowProject.new(context)
-
-    uploads = await project.upload_media([Path("cat.png")])
-    images = await project.generate_image(
-        "a cat astronaut", model="Nano Banana 2.1", aspect_ratio="1:1", outputs=1
+    context = await launch_persistent_context_async(
+        "google-profile", headless=False, humanize=True
     )
-    videos = await project.generate_video(
-        "the cat floats through the station", start_frame=images[0]
-    )
-    await project.download_media(videos[0], Path("downloads"))
-    await project.close()
+    try:
+        project = await GoogleFlowProject.new(context)
+        try:
+            print(project.project_magic, project.project_url)
+            images = await project.generate_image(
+                "a cat astronaut",
+                model="Nano Banana 2.1",
+                aspect_ratio="1:1",
+                outputs=1,
+            )
+            destination = Path("output/downloads")
+            destination.mkdir(parents=True, exist_ok=True)
+            saved = await project.download_media(images[0], destination)
+            print(saved)
+        finally:
+            if not project.is_closed:
+                await project.close()
+    finally:
+        await context.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-## `GoogleFlowProject`
+`close()` leaves the project saved in Flow. Reopen it with
+`GoogleFlowProject.open(project_magic, context)`, using the identifier printed
+above. See the [Flow guide](docs/GOOGLE_FLOW.md) for video generation, uploads,
+settings read-back, and collecting several generation jobs.
 
-| Area | Methods |
-| --- | --- |
-| Projects | `open`, `new`, `rename`, `delete`, `close` |
-| Generation | `generate_image`, `generate_video` (Frames or Ingredients), `start_image`, `start_video`, `wait_for_generations`, `configure`, `get_generation_settings`, `set_agent_mode` |
-| Media | `upload_media`, `list_media`, `download_media`, `reuse_prompt`, `toggle_favourite`, `set_project_cover`, `move_to_bin`, `restore_from_bin` |
-| Scenes | `create_scene` |
+`GoogleFlowProject`, `GeminiChat`, their result models, and the video assembly
+helpers are also available from `generative_ai`. Import provider-specific
+exceptions from `generative_ai.googleflow` or `generative_ai.gemini`.
 
-> **Agent mode:** `set_agent_mode(True)` makes Flow remove the generation
-> settings, and the change carries over to other projects, leaving them in an
-> unexpected state. It emits a `UserWarning`; turn it off and re-apply settings
-> afterwards. `generate_image` and `generate_video` already switch it off.
+## Testing
 
-Media are addressed by Flow's media ID (the tile's `data-media-id`), which
-`upload_media`, `generate_*` and `list_media` return. Video tiles expose no
-ID once rendered, so `download_media` falls back to the media's editor page,
-which also accepts the IDs a video's thumbnail and editor URL carry.
-The project instance retains the relationship between those two IDs, so its
-media actions can still find a video after Flow replaces its thumbnail URL.
-
-Generations can run concurrently in one project: `start_image` and
-`start_video` return a `GenerationJob` as soon as Flow accepts it, and
-`wait_for_generations` maps jobs to media IDs, matching each new tile to its
-job by the prompt Flow shows for it:
-
-```python
-jobs = [await project.start_video(prompt, start_frame=frame) for prompt, frame in shots]
-videos = await project.wait_for_generations(jobs)
-```
-
-Collection compares media identities and verifies each output's prompt, so
-uploads and a fixed-size virtualized grid do not change job attribution.
-Collect a job before submitting another with the same prompt and output kind;
-Flow does not expose enough information to distinguish those concurrent jobs.
-Repeated jobs in one `wait_for_generations` call are returned once.
-
-Model, aspect-ratio and
-download-quality values are Flow's own labels; the options depend on the mode
-and the account, and an unavailable value raises an error listing what Flow
-offers.
-
-Selectors and linear UI flows live in `src/generative_ai/googleflow/manifests/`.
-Every page's viewport is locked to 1280×720, whatever the context or window
-size, because Flow's layout shifts with the viewport (narrower ones switch to a
-mobile layout with different controls).
-
-Each Flow page also enables Chromium focus emulation before navigation. This
-keeps visibility- and focus-dependent JavaScript active while other project
-tabs are being used, including projects opened concurrently with
-`asyncio.gather`. It uses one page-scoped DevTools session, retained until the
-page closes, without a polling loop, tab switching, or extra browser processes.
-Normal Playwright launches already apply this emulation; attaching it here
-also covers Chromium contexts connected with `no_defaults=True`. Flow contexts
-must support `new_cdp_session`; setup errors propagate through the project
-constructor and its page cleanup instead of leaving a partially configured tab.
-
-## Joining clips into one video
-
-Flow returns each generation as a separate clip. `assemble_video` (needs
-`ffmpeg` and `ffprobe` on `PATH`) joins clips into one file where each lasts
-exactly `clip_duration` — longer clips are trimmed, shorter ones hold their
-last frame — with dip-to-black transitions and optional burned-in captions:
-
-```python
-from generative_ai import Caption, Clip, assemble_video
-
-await assemble_video(
-    [Clip(Path("scene_1.mp4"), Caption("1 · The basics", "One fact line")), ...],
-    Path("final.mp4"),
-    clip_duration=8.0,
-)
-```
-
-## Live tests
-
-`tests/live/` drives the real Flow site and is skipped unless `--live` is
-passed. Each test creates throwaway projects and deletes them afterwards. Tests
-that spend generation credits also need `--live-credits`.
+From a source checkout, run the local suite with:
 
 ```bash
-uv run python -m tests.live.sign_in   # once: sign in to Google in ./google-profile
-uv run pytest --live
+uv run python -m playwright install chromium
+uv run pytest
 ```
 
-`--flow-profile` (or `GOOGLE_FLOW_PROFILE`) picks another profile. Sign in with
-`tests.live.sign_in` (CloakBrowser), since Google rejects sign-in in stock
-Playwright Chromium.
-
-## Adding a site
-
-Site-independent code lives in `generative_ai.site`; `googleflow` is the
-reference implementation. A new site `foo` needs:
-
-1. `src/generative_ai/foo/manifests/selectors.yaml` and
-   `manifests/actions/*.yaml` — `web_page` selectors and linear UI flows.
-2. `foo/constants.py` — a `Site` registered with `register_site`:
-
-   ```python
-   SITE = register_site(
-       Site(name="foo", base_url="https://foo.example/", manifests_dir=_MANIFESTS_DIR)
-   )
-   ```
-
-   `Site.attach(page)` sets timeouts and locks the viewport, then loads every
-   manifest; `get_site("foo")` finds it by name. Set `keep_active=True` for
-   Chromium sites that require focus emulation during parallel execution.
-3. `foo/exceptions.py` — errors deriving from `SiteError`.
-4. `foo/page.py` — a `SitePage` subclass. Implement `_closed_error`, decorate
-   public operations with `@page_required` (serialises operations and requires
-   a live page), build instances with `await SITE.attach(page)`, and use
-   `close_page_and_report_failure` / `note_cleanup_failure` in constructors'
-   failure paths.
-5. Re-export the public names from `foo/__init__.py`.
+Local tests include browser fixtures; they do not contact the real sites.
+Live tests are skipped by default. `--live` enables real-site checks, including
+Gemini prompts that consume text quota; `--live-credits` additionally enables
+Flow generation-credit tests and implies `--live`. See
+[Development and testing](docs/DEVELOPMENT.md) for focused commands, profile
+options, prerequisites, and the difference between local and live coverage.

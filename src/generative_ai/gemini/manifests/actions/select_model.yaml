@@ -1,0 +1,13 @@
+name: select_model
+selectors_name: gemini
+params: model
+steps:
+  - run: open_model_menu
+  - if:
+      visible: {target: model_option, timeout: 1000}
+      then:
+        - click: model_option
+        - wait_for: {target: model_menu, state: hidden}
+      else:
+        - get_all_texts: {target: model_labels, as: available}
+        - fail: "Gemini does not offer model '{model}'."

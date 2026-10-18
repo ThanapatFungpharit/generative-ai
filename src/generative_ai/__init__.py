@@ -1,8 +1,9 @@
-"""Browser automation for generative AI tools."""
+"""Async interaction with AI websites through browser automation."""
 
 from __future__ import annotations
 
-from generative_ai import googleflow
+from generative_ai import gemini, googleflow
+from generative_ai.gemini import GeminiChat, GeminiError, GeminiMessage, GeminiResponse
 from generative_ai.googleflow import (
     GenerationJob,
     GenerationMode,
@@ -23,6 +24,10 @@ from generative_ai.video import (
 __all__ = [
     "Caption",
     "Clip",
+    "GeminiChat",
+    "GeminiError",
+    "GeminiMessage",
+    "GeminiResponse",
     "GenerationJob",
     "GenerationMode",
     "GenerationSettings",
@@ -32,6 +37,7 @@ __all__ = [
     "VideoAssemblyError",
     "VideoInput",
     "assemble_video",
+    "gemini",
     "googleflow",
     "probe_duration",
 ]

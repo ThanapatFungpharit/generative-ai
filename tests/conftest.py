@@ -1,4 +1,4 @@
-"""Opt-in switches for tests that drive the real Google Flow website."""
+"""Opt-in switches for tests that drive real generative AI websites."""
 
 from __future__ import annotations
 
@@ -12,14 +12,22 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 DEFAULT_PROFILE = Path(os.environ.get("GOOGLE_FLOW_PROFILE", "google-profile"))
+DEFAULT_GEMINI_PROFILE = Path(os.environ.get("GOOGLE_GEMINI_PROFILE", "gemini-profile"))
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    group = parser.getgroup("live", "Live Google Flow tests")
+    group = parser.getgroup("live", "Live website tests")
     group.addoption(
         "--live",
         action="store_true",
-        help="Run tests marked 'live' against https://flow.google.com/.",
+        help="Run tests marked 'live' against the real Flow and Gemini websites.",
+    )
+    group.addoption(
+        "--gemini-profile",
+        type=Path,
+        default=DEFAULT_GEMINI_PROFILE,
+        help="CloakBrowser profile signed in to Gemini "
+        "(default: $GOOGLE_GEMINI_PROFILE or ./gemini-profile).",
     )
     group.addoption(
         "--live-credits",

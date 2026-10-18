@@ -1,0 +1,8 @@
+name: open_model_menu
+selectors_name: gemini
+steps:
+  - if:
+      hidden: model_menu
+      then:
+        - click: model_picker
+  - wait_for: model_menu

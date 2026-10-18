@@ -1,0 +1,4 @@
+name: wait_for_chat
+selectors_name: gemini
+steps:
+  - wait_for: prompt_editor
